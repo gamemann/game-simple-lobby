@@ -21,11 +21,17 @@ fails=0
 echo "importing"
 "$GODOT" --headless --path . --import >/dev/null 2>&1
 
+# This treats ANY unfiltered output as a parse failure, so the filter below is load
+# bearing: shutdown noise that is not a parse error has to be matched exactly, and the
+# engine is free to reword it. Godot 4.7 did -- "ObjectDB instances leaked at exit"
+# became "5 ObjectDB instances were leaked at exit" -- and the guard then reported two
+# clean scripts as parse failures, which is the way a guard stops being read.
+# Hence ( were )? rather than the literal 4.4 wording.
 echo "parsing"
 while read -r f; do
     out="$("$GODOT" --headless --path . --check-only --script "res://${f#./}" 2>&1 \
         | grep -Ev '^(Godot Engine v|$)' \
-        | grep -Eiv 'ObjectDB instances leaked|resources still in use|Pages in use exist at exit|at: (cleanup|clear|~PagedAllocator)')"
+        | grep -Eiv 'ObjectDB instances( were)? leaked|resources still in use|Pages in use exist at exit|at: (cleanup|clear|~PagedAllocator)')"
     if [ -n "$out" ]; then
         printf '  %sFAIL%s %s\n%s\n' "$RED" "$OFF" "$f" "$out"
         fails=$((fails + 1))

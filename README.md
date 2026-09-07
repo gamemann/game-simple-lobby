@@ -15,8 +15,8 @@ I intend on reviewing code, testing, and editing documentation regularly. If you
 A lobby. You walk about in a small 2D room, you can see who else is in it, and you can
 talk to them.
 
-Part of the [dot-*](../NOTES.md) family. It is the game a
-[dot-server](../dot-server) runs when it is not running anything else — the staging area
+Part of the [dot-*](https://github.com/modcommunity) family. It is the game a
+[dot-server](https://github.com/modcommunity/dot-server) runs when it is not running anything else — the staging area
 a player lands in, and the place they wait while an operator changes the game under them.
 
 ```bash
@@ -38,7 +38,7 @@ to run and dot-server has always supported it; what it did not have was anything
 at. A player who connects and sees nothing cannot tell that from a broken server.
 
 **The thing a generic client shell downloads first.** This is the game shipped as a
-dot-cloud pack in [dot-server-setup-test](../dot-server-setup-test): a browser client
+dot-cloud pack in [dot-server-setup-test](https://github.com/modcommunity/dot-server-setup-test): a browser client
 connects, is sent here, mounts it, and is standing in a room without knowing what a room
 is. `changelevel` then moves them somewhere else and back.
 
@@ -58,7 +58,7 @@ other game also has to get right.
 | **Join and leave** | Announced in the log and in a fading feed. |
 
 No art, no audio, no fonts: everything is a rectangle, a circle or a string, the same way
-[dot-ui](../dot-ui) ships no art and [dot-2d](../dot-2d) draws nothing.
+[dot-ui](https://github.com/modcommunity/dot-ui) ships no art and [dot-2d](https://github.com/modcommunity/dot-2d) draws nothing.
 
 ## Validating
 

@@ -171,10 +171,29 @@ func add_occupant(id: int, display_name: String) -> DotResult:
 			"everybody in a lobby is relevant to everybody else, which is what caps it"
 		)
 
+	# The spawn is pushed out of the furniture before anybody is placed on it.
+	#
+	# [b]A lobby that puts somebody inside a pillar is broken, and quietly.[/b]
+	# `Dot2DArena.spawn_position` knows the room's rectangle and nothing about what is
+	# standing in it, so on a room with furniture a share of its answers are inside
+	# something — and the first thing that happens is that the simulation shoves the new
+	# arrival out. That is a correction on the tick they join, on both ends, from
+	# slightly different starting states, and it showed up as a measurably worse
+	# prediction rate under packet loss long before anybody would have noticed a person
+	# standing in a bench.
+	#
+	# Resolved with the same static function the simulation uses, so the two cannot
+	# drift apart.
+	var placed := RoomContent.resolve_furniture(
+		arena.spawn_position(id, RoomContent.OCCUPANT_RADIUS * 4.0),
+		RoomContent.OCCUPANT_RADIUS,
+		[]
+	)
+
 	var occupant := RoomOccupant.create(
 		id,
 		display_name.substr(0, RoomContent.NAME_BYTES),
-		arena.spawn_position(id, RoomContent.OCCUPANT_RADIUS * 4.0)
+		placed
 	)
 
 	occupants[id] = occupant
@@ -276,6 +295,32 @@ func simulate_occupant(
 	occupant.state.position = arena.clamp_position(
 		occupant.state.position, occupant.state.radius
 	)
+
+	# The furniture, resolved AFTER the walls.
+	#
+	# The order matters and only in one place: somebody squeezed between a wall and a
+	# bench. Resolving the wall last would push them back into the bench and leave them
+	# inside it; resolving the furniture last leaves them slightly outside the wall,
+	# which the next tick's clamp fixes and which nobody can see. There is no order that
+	# satisfies both at once, and the visible failure of one of them is much worse.
+	var normals: Array = []
+	occupant.state.position = RoomContent.resolve_furniture(
+		occupant.state.position, occupant.state.radius, normals
+	)
+
+	# The velocity going INTO whatever pushed them, removed.
+	#
+	# Without this a player holding a direction against the island is pushed out by the
+	# resolve and accelerated straight back in by the motor on the very next tick, sixty
+	# times a second. The position ends up correct and the movement reads as lag —
+	# which is the worst way for a level to be wrong, because it sends the next person
+	# to the netcode.
+	for entry in normals:
+		var normal: Vector2 = entry
+		var into := occupant.state.velocity.dot(normal)
+
+		if into < 0.0:
+			occupant.state.velocity -= normal * into
 
 
 ## Advances the client's own clock without simulating anybody.

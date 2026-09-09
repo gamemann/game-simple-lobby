@@ -22,6 +22,10 @@ var local_occupant_id: int = 0
 @export var floor_colour: Color = Color(0.10, 0.11, 0.14, 1.0)
 @export var grid_colour: Color = Color(1.0, 1.0, 1.0, 0.045)
 @export var wall_colour: Color = Color(0.35, 0.62, 0.85, 0.85)
+
+## The furniture's fill. Lighter than the floor and much darker than a person, so a
+## pillar reads as part of the room rather than as somebody standing very still.
+@export var furniture_colour: Color = Color(0.21, 0.23, 0.29, 1.0)
 @export var name_colour: Color = Color(0.93, 0.94, 0.96, 1.0)
 @export var bubble_colour: Color = Color(0.96, 0.97, 0.99, 0.94)
 @export var bubble_text_colour: Color = Color(0.08, 0.09, 0.11, 1.0)
@@ -52,6 +56,7 @@ func _draw() -> void:
 
 	draw_rect(bounds, floor_colour, true)
 	_draw_grid(bounds)
+	_draw_furniture()
 	draw_rect(bounds, wall_colour, false, 3.0)
 
 	var now := Time.get_ticks_msec()
@@ -73,6 +78,24 @@ func _draw() -> void:
 		# standing lower down. Speech is the one thing in this room that must be readable.
 		if occupant.has_bubble(now):
 			_draw_bubble(occupant, now)
+
+
+## The furniture, from the same list the simulation collides against.
+##
+## [b]Read from [RoomContent] rather than laid out here.[/b] A renderer with its own copy
+## of the level is a client that draws a room the server is not simulating — and the
+## symptom is not a missing pillar, it is a player being corrected out of a space that
+## looks empty. This family has shipped the same class of bug twice with a world extent.
+##
+## Drawn under the grid lines' colour and over the floor, so the furniture reads as part
+## of the room rather than as objects sitting on it. A lobby's landmarks should look
+## built in.
+func _draw_furniture() -> void:
+	for piece in RoomContent.furniture():
+		var centre := Vector2(piece.x, piece.y)
+
+		draw_circle(centre, piece.z, furniture_colour)
+		draw_arc(centre, piece.z, 0.0, TAU, 48, wall_colour, 2.0)
 
 
 func _draw_grid(bounds: Rect2) -> void:

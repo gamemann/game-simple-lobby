@@ -92,6 +92,87 @@ static func colour_for(id: int) -> Color:
 const FLOOR_GRID := 80.0
 
 
+## The furniture, as circles: x and y are the centre, z is the radius.
+##
+## [b]This is the room's LEVEL, and it is here rather than in the renderer for the reason
+## at the top of this file.[/b] An obstacle a client draws and does not collide with is a
+## client whose prediction disagrees with the server on every tick a player walks into
+## it — and an obstacle the server has and the client does not is worse, because the
+## player is corrected out of a space that looks empty. Both ends read this list and both
+## ends resolve it in [method RoomWorld.simulate_occupant], which is the one function a
+## client replays.
+##
+## [b]Circles rather than rectangles, and it is not laziness.[/b] Pushing a walker out of
+## a circle is one normalise and one multiply, is exact, and has no corner case; pushing
+## one out of a rectangle has four, and the one where somebody is exactly on a diagonal
+## is the one that puts them inside. A lobby does not need square furniture badly enough
+## to pay for that.
+##
+## [b]A packed array of Vector3 rather than an array of dictionaries[/b], because this is
+## read on every occupant on every tick on both ends: a dictionary lookup per field per
+## obstacle per person is the sort of thing that is free at four people and is not at
+## sixty-four.
+##
+## The layout: a big central island so the room has a middle to walk around rather than
+## across, four pillars marking the quarters so "by the north-west pillar" means
+## something, and two benches off to one side. Nothing here is decoration — every one of
+## them is a thing to stand behind, and a lobby where everybody stands in one place is a
+## lobby where the roster is the only thing anybody reads.
+static func furniture() -> PackedVector3Array:
+	return PackedVector3Array([
+		# The island. Big enough to walk round and small enough to see over.
+		Vector3(0.0, 0.0, 150.0),
+
+		# The quarters. Placed on a rectangle rather than a circle so the room reads as
+		# a room: four points on a circle in a rectangular space look like a mistake.
+		Vector3(-460.0, -280.0, 46.0),
+		Vector3(460.0, -280.0, 46.0),
+		Vector3(-460.0, 280.0, 46.0),
+		Vector3(460.0, 280.0, 46.0),
+
+		# Two benches by the east wall, far enough apart to stand between.
+		Vector3(700.0, -110.0, 60.0),
+		Vector3(700.0, 110.0, 60.0),
+	])
+
+
+## Pushes [param position] out of any furniture it is inside. Returns where it ends up.
+##
+## [b]Static and side-effect free, because both ends call it and one of them calls it
+## inside a prediction replay.[/b] Anything stateful here — a cached nearest obstacle, a
+## "was I stuck last tick" flag — is state a replay does not have and a correction the
+## player sees.
+##
+## [param out_normal] is filled with the push direction when there was one, so the caller
+## can also kill the velocity going into the obstacle. Without that a player holding a
+## direction against the island is pushed out and accelerated back in on every tick, and
+## the resulting jitter reads as lag.
+static func resolve_furniture(
+	position: Vector2, radius: float, out_normal: Array
+) -> Vector2:
+	var resolved := position
+
+	for piece in furniture():
+		var centre := Vector2(piece.x, piece.y)
+		var clearance := piece.z + radius
+		var away := resolved - centre
+		var distance := away.length()
+
+		if distance >= clearance:
+			continue
+
+		# Dead centre. A zero-length normal would come out as NaN and put the walker
+		# nowhere, so the tie is broken toward +X — deterministically, because the one
+		# thing worse than an arbitrary direction is two machines choosing different
+		# arbitrary directions.
+		var normal := away / distance if distance > 0.001 else Vector2.RIGHT
+
+		resolved = centre + normal * clearance
+		out_normal.append(normal)
+
+	return resolved
+
+
 ## The netcode's settings, in one place both ends read.
 ##
 ## [b]Built here rather than three times.[/b] A server, a client and the offline pair each

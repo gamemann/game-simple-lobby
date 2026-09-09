@@ -38,6 +38,61 @@ this game did not route around it.
 The bubble over somebody's head is drawn from the same payload the log is. One path, so a
 bubble can never say something the log does not.
 
+## The room has furniture, and it is in `RoomContent` for the same reason its size is
+
+The room was an empty rectangle. It now has an island in the middle, four pillars marking
+the quarters and two benches by the east wall — landmarks, so "by the north-west pillar"
+means something and a lobby is a place with a shape rather than a plane everybody stands
+in the middle of.
+
+**The list lives in `RoomContent` and both ends collide against it.** An obstacle a client
+draws and does not collide with is a client whose prediction disagrees with the server
+every tick somebody walks into it; an obstacle the server has and the client does not is
+worse, because the player is corrected out of a space that looks empty. The resolution is
+a static function on `RoomContent` called from `RoomWorld.simulate_occupant`, which is the
+one function a client replays.
+
+**Circles, not rectangles.** Pushing a walker out of a circle is one normalise and one
+multiply, is exact, and has no corner case. A rectangle has four, and the one where
+somebody is exactly on a diagonal is the one that puts them inside.
+
+**The velocity into whatever pushed is removed.** Without it a player leaning on the
+island is pushed out by the resolve and accelerated straight back in by the motor on the
+next tick, sixty times a second. The position stays correct and the movement reads as
+lag — which is the worst way for a level to be wrong, because it sends the next person to
+the netcode.
+
+**The spawn is resolved too.** `Dot2DArena.spawn_position` knows the room's rectangle and
+nothing about what is standing in it, so a share of its answers are inside something. A
+lobby that puts somebody inside a bench is broken quietly.
+
+### What the furniture cost in the netcode suite, and what it did not
+
+The "under loss" section's correction rate went from 0.325 to 0.475 when the room gained
+furniture, and the interesting part is that **none of it was the furniture**.
+
+- The old walk aimed at the middle of the room, which is now the island — so it measured
+  a player grinding against a curved obstacle, which is the most divergence-amplifying
+  thing in the room.
+- Rerouted to "open floor", the first attempt scanned the grid from a corner and returned
+  a point pressed against two walls. 0.475.
+- Rerouted again to a heading checked *along its whole length*, it reads 0.375 — **and it
+  reads 0.375 with the furniture list emptied as well.** That control is the answer: under
+  a quarter of snapshots dropped, two different paths of the same length through the same
+  simulation report rates five points apart.
+
+So the drift is the evidence and the rate is a proxy: 0.078 units of disagreement is two
+ends running the same simulation whatever the rate says. The threshold is 0.45 now, with
+the measurement written beside it, and stays under 0.5 because 0.5 is what a second
+reconciliation pass looks like.
+
+`headless_net` gained an **against the furniture** section, and its first version failed
+at 20.6 units apart — which was not a disagreement either. The client's input timeline
+leads the server by the flight time plus a margin, so a *moving* client is meant to be
+about five ticks ahead, and five ticks of walk speed is twenty units. Sliding along a
+curve turns that lead into a distance instead of hiding it behind a straight line.
+Comparing two ends while one is deliberately ahead measures the lead. It settles first now.
+
 ## Everybody is always relevant, and that is what caps the room
 
 `DotNetIdentity.always_relevant` is set on every occupant. A room is smaller than a screen
@@ -151,7 +206,7 @@ tools/check.sh                # all four, after a parse pass
 | | | |
 | --- | --- | --- |
 | `headless_room` | 31 | the room alone. Membership, walls, and two worlds replaying the same commands bit-identically |
-| `headless_net` | 59 | every encoder against its decoder, then a session over a lossy delaying loopback |
+| `headless_net` | 65 | every encoder against its decoder, then a session over a lossy delaying loopback, then a walk into the furniture |
 | `dedicated` | 40 | a real `DotServer`, a real module, a real WebSocket listener |
 | `sandbox` | 41 | **a real server and two real clients, over real sockets, in one process** |
 
@@ -176,12 +231,36 @@ the total at the bottom cannot reveal a check that never ran.
 | To change | Where |
 | --- | --- |
 | The room's size, speed, capacity, palette | `RoomContent` — constants, because both ends read them and a mismatch is silent |
+| What is standing in the room | `RoomContent.furniture()`, collided against by both ends and drawn from the same list |
 | The netcode's settings | `RoomContent.net_config()`, in one place so three call sites cannot drift |
 | Where a command comes from | `RoomInput.command_source` — bots, demo playback, tests |
 | How somebody is drawn | `RoomRenderer`, which reads the world and never writes to it |
 | Where the round trip is measured | `RoomBridge.rtt_source` |
 | Whether the world sets itself up | `RoomWorld.auto_setup` |
 | Which link a client uses | `RoomClient.link`, assigned before it enters the tree |
+
+## Looking at it
+
+```bash
+tools/screenshot.sh          # -> screenshots/room.png, gitignored
+```
+
+Needs `xvfb-run`: `--headless` gives a null renderer and saves empty frames, which is
+worse than no screenshot because it looks like one. Copied from `game-arena`'s rather than
+shared with it, because these are separate repositories.
+
+**It took three attempts to frame, and every failure looked like a renderer bug.**
+`root.size` read in `SceneTree._initialize` is whatever the window was created with before
+the platform has finished sizing it — 121 units wide on this box — which fitted an
+1800-unit room into a postage stamp. A `Camera2D.zoom` fitted by the documented convention
+came out magnified instead, so the walls were off every edge. It scales and offsets the
+renderer node now, because `scale` multiplies and `position` is where the origin lands and
+there is nothing to get the direction of.
+
+`RoomWorld.setup()` is also called explicitly there: a node added from `_initialize` gets
+its `_ready` on the first frame, so `world.arena` is still null and `add_occupant` fails
+with "Nonexistent function 'spawn_position' in base 'Nil'" — which reads like a missing
+method rather than like a node that has not started yet.
 
 ## Things deliberately not here
 

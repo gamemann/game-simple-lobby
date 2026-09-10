@@ -41,6 +41,7 @@ func _run() -> void:
 	_test_bounds()
 	_test_determinism()
 	_test_bubbles()
+	_test_spectating()
 
 	print("")
 	_check(
@@ -116,6 +117,69 @@ func _test_setup() -> void:
 		+ "clamped to"
 	)
 	_check(world.occupant_count() == 0, "with nobody in it")
+	_done()
+
+
+## Watching somebody else, which is what you do in a lobby while you wait.
+func _test_spectating() -> void:
+	_section("spectating")
+
+	var world := _world(&"spectate")
+
+	if not _check(world.spectate != null, "the world builds a spectate layer"):
+		_done()
+		return
+
+	var rules := world.spectate.manager.rules
+	_check(
+		rules.allow_while_alive,
+		"a living occupant may watch, because everybody here is alive and the rule "
+		+ "from a deathmatch would mean nobody could watch anything"
+	)
+	_check(
+		rules.allow_roaming,
+		"and may roam, because a free camera over a twenty-metre room is not an "
+		+ "advantage, it is how you look at the furniture"
+	)
+	_check(
+		rules.death_cam_ticks == 0 and rules.freeze_cam_ticks == 0,
+		"with no death cameras at all: nobody dies here, and a timer that can never "
+		+ "fire is a thing somebody eventually spends an afternoon on"
+	)
+
+	var a := world.add_occupant(1, "Ada")
+	var b := world.add_occupant(2, "Bob")
+	_check(a.ok and b.ok, "two people are in the room")
+
+	var occupant_b := world.occupant_for(2)
+	occupant_b.state.position = Vector2(120.0, -80.0)
+
+	var watched := world.spectate.watch(1, 2)
+	_check(watched.ok, "one can watch the other", str(watched.error))
+	_check(world.spectate.watching(1) == 2, "and is watching them")
+
+	world.tick({})
+
+	var where: Variant = world.spectate.camera_position(1)
+	_check(where != null, "the camera has a position")
+
+	if where is Vector2:
+		_check(
+			(where as Vector2).distance_to(occupant_b.position()) < 1.0,
+			"which is where that occupant actually is, on the XZ plane the whole "
+			+ "family maps 2D onto",
+			"%v against %v" % [where as Vector2, occupant_b.position()]
+		)
+
+	# The one thing a lobby camera really has to survive.
+	world.remove_occupant(2)
+	world.tick({})
+	_check(
+		world.spectate.watching(1) != 2,
+		"and a target who leaves is not still being watched",
+		str(world.spectate.watching(1))
+	)
+
 	_done()
 
 

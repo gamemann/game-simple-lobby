@@ -84,6 +84,9 @@ var occupants: Dictionary = {}
 ## and get the same answer.
 var props: RoomProps = null
 
+## Watching somebody else in the room, which is what you do while you wait.
+var spectate: RoomSpectate = null
+
 var _tick: int = 0
 var _registered_name: StringName = &""
 var _ready_called: bool = false
@@ -133,6 +136,18 @@ func setup() -> DotResult:
 
 	motor = Dot2DMotor.with_tunables(tunables)
 	motor.body = arena.body
+
+	spectate = RoomSpectate.new()
+	spectate.name = "Spectate"
+	add_child(spectate)
+
+	var watching := spectate.setup(self)
+
+	if not watching.ok:
+		DotLog.warn(CHANNEL, "spectating is off", {"why": watching.error.message})
+		remove_child(spectate)
+		spectate.queue_free()
+		spectate = null
 
 	if register_service:
 		_registered_name = (
@@ -280,6 +295,11 @@ func tick(commands: Dictionary) -> void:
 
 	arena.sync_grid()
 
+	# After the moves: a camera has to be looking at where this tick left everybody,
+	# not where the last one did.
+	if spectate != null:
+		spectate.tick(delta)
+
 
 ## One person, one tick. The whole of the movement, and the only thing a client predicts.
 ##
@@ -353,6 +373,11 @@ func simulate_occupant(
 ## is what a chat bubble's lifetime and the roster's ordering are measured against.
 func client_tick(tick_number: int) -> void:
 	_tick = tick_number
+
+	# After the tick number is adopted, not before: the camera samples against
+	# `current_tick`, and sampling before it moves asks for a tick that has not happened.
+	if spectate != null:
+		spectate.tick(tick_duration())
 
 
 # --- Reporting -------------------------------------------------------------

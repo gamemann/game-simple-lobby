@@ -432,6 +432,30 @@ its `_ready` on the first frame, so `world.arena` is still null and `add_occupan
 with "Nonexistent function 'spawn_position' in base 'Nil'" — which reads like a missing
 method rather than like a node that has not started yet.
 
+## Watching somebody else
+
+**A lobby is the smallest possible use of dot-spectate, and that is why it is here.**
+This project exists to be the staging area — the smallest thing that still exercises
+admission, membership, replication, prediction and chat — and a spectator camera has the
+same shape as all of those: a rule the server owns, a state a client mirrors, and a
+camera that has to point somewhere sensible when the thing it was following is gone.
+
+Nobody dies in a lobby, so there is no death camera and no hand-over chain; both timers
+are set to zero rather than left at their defaults, because **a timer that can never fire
+is a thing somebody eventually spends an afternoon on**. What is left is the part a lobby
+actually wants: follow somebody while you wait, and cope when they leave.
+
+Two settings are the opposite of every other game's and both are deliberate:
+
+- **A living occupant may watch.** Everybody here is alive; the deathmatch rule would
+  mean nobody could ever watch anything.
+- **Roaming is on.** A room twenty metres across is not a map to be scouted, and a free
+  camera over it is how you look at the furniture.
+
+`occupant_left` is connected rather than the camera being told directly, and the order
+matters: dot-spectate picks a replacement from the participants list, so a game that
+reports the departure *before* removing the occupant picks the occupant who just left.
+
 ## Things deliberately not here
 
 - **Interest management.** Everybody is always relevant, and `MAX_OCCUPANTS` is the price.

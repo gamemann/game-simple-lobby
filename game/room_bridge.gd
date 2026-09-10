@@ -30,6 +30,31 @@ signal hello_received(occupant_id: int)
 ## The server has finished sending the roster. Client side, and what "you are in" means.
 signal roster_complete()
 
+## Somebody pressed Enter. Server side, and the only thing this bridge does with chat.
+##
+## [b]The bridge carries chat and decides nothing about it.[/b] Who may say what, on which
+## channel, how often, and who hears it are [DotChatRouter]'s, and [RoomModule] is what
+## joins the two. A netcode that also held the chat rules would be a netcode somebody had
+## to change to add a channel.
+signal say_requested(peer_id: int, channel_id: StringName, text: String)
+
+## Somebody asked to put something in the room, or to take the last one back. Server side.
+signal place_requested(peer_id: int, prop_index: int, at: Vector2, rotation: float)
+signal undo_requested(peer_id: int)
+
+## A voice frame arrived. Server side; the payload has not been parsed and must not be
+## trusted — [method DotVoiceRouter.relay] is what stamps the speaker.
+signal voice_requested(peer_id: int, payload: PackedByteArray)
+
+## A chat line landed. Client side, for [DotChatClient].
+signal chat_received(wire: Dictionary)
+
+## A voice frame landed. Client side, for [DotVoiceManager].
+signal voice_arrived(payload: PackedByteArray)
+
+## Somebody's avatar document arrived. Client side.
+signal avatar_received(occupant_id: int, parts: Array)
+
 var world: RoomWorld = null
 var net: DotNetManager = null
 var link: RoomLink = null
@@ -368,6 +393,33 @@ func ready_peer_count() -> int:
 	return _ready_peers.size()
 
 
+## Takes a peer off the broadcast set without touching anything else. Server side.
+##
+## [b]What a disconnect does first.[/b] Everything a leave then triggers — the chat
+## notice, the prop cleanup — announces something ABOUT that person TO everybody else, and
+## this peer's socket has already gone: sending to it is one "Attempt to call RPC with
+## unknown peer ID" per announcement, in the log of every single disconnect, which is
+## where somebody looks when something else is wrong. This game already fixed that once
+## from the other end, when the leave broadcast itself went to the peer that had left.
+func mark_not_ready(peer_id: int) -> void:
+	_ready_peers.erase(peer_id)
+
+
+## Everybody who has said they can receive. Server side.
+##
+## [b]The set chat and voice are addressed against, and it is deliberately not
+## [method DotServer.sessions].[/b] A session exists from the moment a socket connects;
+## a ready peer is one that has built its scene and can be sent to. Routing a chat line
+## to the first is a "Node not found" per recipient and a line nobody got.
+func ready_peers() -> PackedInt32Array:
+	var out := PackedInt32Array()
+
+	for peer_id in _ready_peers.keys():
+		out.append(int(peer_id))
+
+	return out
+
+
 ## Marks a peer able to receive, and gives it everything it has missed.
 ##
 ## Also where the peer joins the manager: a peer registered before it can receive is a
@@ -678,6 +730,34 @@ func receive_input(peer_id: int, payload: PackedByteArray) -> DotResult:
 	return net.input_buffer_for(peer_id).push(command)
 
 
+## A voice frame off [method RoomLink.send_voice], in whichever direction this end is.
+##
+## [b]Not a [RoomEvent].[/b] Voice is fifty packets a second and every RoomEvent is
+## reliable, so a talk spurt would put a hundred retransmittable messages in front of a
+## join. It also does not go through [DotNetManager] at all: dot-net's registry seals a
+## message set and hashes it, and adding a fifty-hertz opaque blob to that set buys
+## nothing — the packet already has its own header, its own sequence and its own
+## validation in [DotVoicePacket].
+func receive_voice(peer_id: int, payload: PackedByteArray) -> DotResult:
+	if payload.is_empty():
+		return DotResult.fail(DotError.CODE_INVALID, "An empty voice frame.")
+
+	if net != null and net.is_server:
+		if peer_id <= 0 or not _occupant_of_peer.has(peer_id):
+			# A peer with nobody in the room. Refused rather than relayed: the router
+			# stamps the speaker from this id, so relaying one that belongs to nobody
+			# would put a voice in the room with no name on it.
+			return DotResult.fail(
+				DotError.CODE_FORBIDDEN, "That peer has nobody in the room."
+			)
+
+		voice_requested.emit(peer_id, payload)
+		return DotResult.success(null)
+
+	voice_arrived.emit(payload)
+	return DotResult.success(null)
+
+
 func receive_event(payload: PackedByteArray) -> DotResult:
 	if net == null or net.is_server:
 		return DotResult.fail(DotError.CODE_FORBIDDEN, "A server does not take events.")
@@ -740,7 +820,122 @@ func _send_roster(peer_id: int) -> void:
 				)
 			)
 
+	# The furniture people have placed goes out with the roster and BEFORE the marker
+	# that says the list is complete. A client that drew the room and then had the
+	# benches appear would show a lobby being decorated on every connect — and, worse,
+	# would walk through them for the fraction of a second in between, because both ends
+	# collide against the same list and one of them would not have it yet.
+	send_props(peer_id)
+
 	_tell(peer_id, RoomEvents.Kind.ROSTER_END, RoomEvents.write_empty())
+
+
+## One chat line to one peer. Server side, and what [DotChatRouter.send_fn] points at.
+##
+## [b]Peer by peer, never a broadcast, and that is the router's decision rather than
+## this one's.[/b] The router has already worked out exactly who may hear a line — a
+## team, a radius, two people in a whisper — and handing the result to a broadcast would
+## throw that away in the one place it matters most.
+func send_chat(peer_id: int, wire: Dictionary) -> void:
+	_tell(peer_id, RoomEvents.Kind.CHAT, RoomEvents.write_chat(wire))
+
+
+## A placement, to everybody who can receive one. Server side.
+func broadcast_prop_placed(
+	place_id: int, prop_id: StringName, at: Vector2, rotation: float, owner_id: int
+) -> void:
+	var index := RoomProps.index_of(prop_id)
+
+	if index < 0:
+		# A prop the wire has no index for. Loud, because the placement has already
+		# happened on the server and the room is now one bench out of step with every
+		# client — which is exactly the silent divergence this game's whole wire is
+		# arranged to avoid.
+		DotLog.error(CHANNEL, "a placed prop is not in the wire catalogue", {
+			"prop": String(prop_id),
+		})
+		return
+
+	_broadcast(
+		RoomEvents.Kind.PROP_PLACED,
+		RoomEvents.write_prop_placed(place_id, index, at, rotation, owner_id)
+	)
+
+
+func broadcast_prop_cleared(place_id: int) -> void:
+	_broadcast(RoomEvents.Kind.PROP_CLEARED, RoomEvents.write_prop_cleared(place_id))
+
+
+## Everything already in the room, to one peer who has just arrived.
+##
+## Sent with the roster rather than after it: a client that drew the room and then had
+## the furniture appear would show a lobby being decorated on every connect, which is
+## the same argument [constant RoomEvents.Kind.ROSTER_END] exists for.
+func send_props(peer_id: int) -> void:
+	if world == null or world.props == null:
+		return
+
+	var placements := world.props.placements()
+
+	for key in placements.keys():
+		var entry: Dictionary = placements[key]
+		var def: DotPropDef = entry["def"]
+		var index := RoomProps.index_of(def.id)
+
+		if index < 0:
+			continue
+
+		_tell(
+			peer_id,
+			RoomEvents.Kind.PROP_PLACED,
+			RoomEvents.write_prop_placed(
+				int(key), index, entry["at"], entry["rotation"], int(entry["owner"])
+			)
+		)
+
+
+## Somebody's avatar, to everybody. Server side.
+func broadcast_avatar(occupant_id: int, parts: Array) -> void:
+	_broadcast(RoomEvents.Kind.AVATAR, RoomEvents.write_avatar(occupant_id, parts))
+
+
+## Somebody's avatar, to one peer. Server side, for a roster.
+func send_avatar(peer_id: int, occupant_id: int, parts: Array) -> void:
+	_tell(peer_id, RoomEvents.Kind.AVATAR, RoomEvents.write_avatar(occupant_id, parts))
+
+
+## Client side: say something.
+func say(channel_id: StringName, text: String) -> void:
+	if net == null or net.is_server or text.strip_edges() == "":
+		return
+
+	net.send(RoomRequest.of(RoomEvents.Ask.SAY, RoomEvents.write_say(channel_id, text)), 1)
+
+
+## Client side: ask for something to be put in the room.
+func ask_to_place(prop_id: StringName, at: Vector2, rotation: float = 0.0) -> void:
+	if net == null or net.is_server:
+		return
+
+	var index := RoomProps.index_of(prop_id)
+
+	if index < 0:
+		return
+
+	net.send(
+		RoomRequest.of(
+			RoomEvents.Ask.PLACE_PROP, RoomEvents.write_place_prop(index, at, rotation)
+		),
+		1
+	)
+
+
+## Client side: take back the last thing I put in the room.
+func ask_to_undo() -> void:
+	if net == null or net.is_server:
+		return
+
+	net.send(RoomRequest.of(RoomEvents.Ask.UNDO_PROP), 1)
 
 
 # --- Events, inbound -------------------------------------------------------
@@ -766,8 +961,53 @@ func _on_event(message: DotNetMessage) -> void:
 			_apply_despawn(reader)
 		RoomEvents.Kind.ROSTER_END:
 			roster_complete.emit()
+		RoomEvents.Kind.CHAT:
+			var wire := RoomEvents.read_chat(reader)
+
+			if bool(wire["ok"]):
+				chat_received.emit(wire)
+		RoomEvents.Kind.PROP_PLACED:
+			_apply_prop_placed(reader)
+		RoomEvents.Kind.PROP_CLEARED:
+			var place_id := RoomEvents.read_prop_cleared(reader)
+
+			if reader.ok() and world != null and world.props != null:
+				world.props.drop(place_id)
+		RoomEvents.Kind.AVATAR:
+			var avatar := RoomEvents.read_avatar(reader)
+
+			if bool(avatar["ok"]):
+				avatar_received.emit(int(avatar["occupant_id"]), avatar["parts"])
 		_:
 			DotLog.warn(CHANNEL, "unhandled event", {"kind": event.kind})
+
+
+## Client side: adopt a placement the server announced.
+##
+## [b]The id is adopted, never allocated.[/b] A receiving peer that numbered things itself
+## would give the same bench two names on two machines, and every count would match while
+## nothing lined up — which is the bug dot-2d had to gain `Dot2DScatter.adopt` to fix.
+func _apply_prop_placed(reader: DotNetReader) -> void:
+	var placed := RoomEvents.read_prop_placed(reader)
+
+	if not bool(placed["ok"]) or world == null or world.props == null:
+		return
+
+	var prop_id := RoomProps.id_at(int(placed["prop_index"]))
+
+	if prop_id == &"":
+		DotLog.warn(CHANNEL, "the server placed a prop this build has no index for", {
+			"index": placed["prop_index"],
+		})
+		return
+
+	world.props.adopt(
+		int(placed["place_id"]),
+		prop_id,
+		placed["position"],
+		float(placed["rotation"]),
+		int(placed["owner_id"])
+	)
 
 
 func _apply_hello(reader: DotNetReader) -> void:
@@ -927,6 +1167,28 @@ func _on_request(message: DotNetMessage) -> void:
 				return
 
 			_admit(peer_id, occupant_id)
+		RoomEvents.Ask.SAY:
+			var said := RoomEvents.read_say(request.reader())
+
+			if bool(said["ok"]):
+				# Emitted rather than acted on. Everything about what a line means — the
+				# channel's audience, the gag, the rate limit, the command prefix — is
+				# [DotChatRouter]'s, and the router is [RoomModule]'s.
+				say_requested.emit(
+					peer_id, StringName(str(said["channel"])), str(said["text"])
+				)
+		RoomEvents.Ask.PLACE_PROP:
+			var wanted := RoomEvents.read_place_prop(request.reader())
+
+			if bool(wanted["ok"]):
+				place_requested.emit(
+					peer_id,
+					int(wanted["prop_index"]),
+					wanted["position"],
+					float(wanted["rotation"])
+				)
+		RoomEvents.Ask.UNDO_PROP:
+			undo_requested.emit(peer_id)
 		_:
 			DotLog.warn(CHANNEL, "unhandled request", {"kind": request.kind})
 

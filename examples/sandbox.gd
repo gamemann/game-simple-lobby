@@ -36,12 +36,20 @@ var _server: DotServer = null
 var _client_side: Node = null
 var _link: DotClientLink = null
 var _client: RoomClient = null
-var _heard: Array[Dictionary] = []
+var _heard: Array[DotChatMessage] = []
+
+## Anything that came back through dot-server's own chat signal.
+##
+## [b]Expected to stay empty, and that is the check.[/b] This game moved its chat rules
+## onto [DotChatRouter] and cancels dot-server's broadcast, so a line arriving here as
+## well would be two paths delivering one message — the failure the cancel exists to
+## prevent, and the one nobody would notice because the message still arrives.
+var _legacy_heard: Array[Dictionary] = []
 
 var _other_side: Node = null
 var _other_link: DotClientLink = null
 var _other: RoomClient = null
-var _other_heard: Array[Dictionary] = []
+var _other_heard: Array[DotChatMessage] = []
 
 
 func _ready() -> void:
@@ -63,6 +71,8 @@ func _run() -> void:
 			await _test_chat()
 			await _test_two_people()
 			await _test_walking()
+			await _test_props()
+			await _test_voice()
 			await _test_leaving()
 
 	_teardown()
@@ -254,8 +264,12 @@ func _test_join() -> bool:
 	# for a signal that fired perfectly.
 	_link.spawned.connect(func() -> void: spawned[0] = true)
 	_link.disconnected.connect(func(reason: String) -> void: refused[0] = reason)
+	# [b]dot-server's own `chat_received` is deliberately NOT what this listens on.[/b]
+	# The module cancels that path and routes every line through [DotChatRouter] onto
+	# this game's own wire; a test that still listened there would pass on a server
+	# running the old path and fail on the one that ships.
 	_link.chat_received.connect(func(payload: Dictionary) -> void:
-		_heard.append(payload)
+		_legacy_heard.append(payload)
 	)
 
 	var connecting: DotResult = await _link.connect_to_server("127.0.0.1:%d" % PORT)
@@ -283,6 +297,10 @@ func _test_join() -> bool:
 	)
 
 	_client = _make_client(_client_side, _link)
+	_client.chat.message_received.connect(
+		func(message: DotChatMessage, _channel: StringName) -> void:
+			_heard.append(message)
+	)
 
 	var told := await _until(func() -> bool:
 		return _client.bridge != null and _client.bridge.local_occupant_id != 0
@@ -337,15 +355,12 @@ func _test_room() -> void:
 func _test_chat() -> void:
 	_section("chat")
 
-	# dot-server's, not this game's: routed, sanitised, flood-limited and
-	# permission-filtered there, and delivered through [signal DotClientLink.chat_received].
-	_link.send_chat("hello from Ada")
+	# This game's own wire, through [DotChatRouter]: sanitised, flood-limited, gag-checked
+	# and addressed there, and delivered as a [constant RoomEvents.Kind.CHAT] event.
+	_client.bridge.say(RoomServices.CHANNEL_ALL, "hello from Ada")
 
 	var heard := await _until(func() -> bool:
-		for payload in _heard:
-			if String(payload.get("text", "")) == "hello from Ada":
-				return true
-		return false
+		return _text_heard(_heard, "hello from Ada")
 	)
 
 	_check(heard, "a line the client sent comes back to it")
@@ -362,20 +377,51 @@ func _test_chat() -> void:
 		"on the server too, which is what `room_who` reports from"
 	)
 
-	# Sanitising is dot-server's and is checked there; what matters here is that this game
-	# did not route around it.
-	_link.send_chat("a​b")
+	_check(
+		_legacy_heard.is_empty(),
+		"and dot-server's own chat delivered nothing beside it (%d)"
+			% _legacy_heard.size(),
+		"two paths for one message is two sets of rules, and the one that skipped the "
+		+ "filter would be the one that leaked admin chat"
+	)
+
+	# Sanitising is dot-chat's now. What matters here is the same thing it always did:
+	# that this game did not route around it.
+	_client.bridge.say(RoomServices.CHANNEL_ALL, "a​b")
 	await _settle(30)
 
-	var last := String(
-		(_heard[_heard.size() - 1] as Dictionary).get("text", "")
-	) if not _heard.is_empty() else ""
+	var last := _heard[_heard.size() - 1].text if not _heard.is_empty() else ""
 	_check(
 		not last.contains("​"),
 		"and a zero-width character is stripped before anybody sees it (%s)" % last,
 		"used to spoof names and hide text; a second chat path would skip this"
 	)
+
+	# [b]The legacy path still works and is still the router's.[/b] A browser shell's own
+	# chat box and a client console's `say` both go through dot-server, and the module
+	# forwards them rather than dropping them — so the check is that a line sent the old
+	# way comes back on the new wire.
+	_link.send_chat("said the old way")
+
+	var forwarded := await _until(func() -> bool:
+		return _text_heard(_heard, "said the old way")
+	)
+
+	_check(
+		forwarded,
+		"a line sent through dot-server's own chat is forwarded onto this game's wire",
+		"the browser shell has no way to name a channel and must still be able to talk"
+	)
 	_done()
+
+
+## Whether any line in [param lines] says exactly [param text].
+func _text_heard(lines: Array[DotChatMessage], text: String) -> bool:
+	for message in lines:
+		if message.text == text:
+			return true
+
+	return false
 
 
 ## A second person, over a second socket, in a third MultiplayerAPI.
@@ -405,7 +451,7 @@ func _test_two_people() -> void:
 	var spawned := [false]
 	_other_link.spawned.connect(func() -> void: spawned[0] = true)
 	_other_link.chat_received.connect(func(payload: Dictionary) -> void:
-		_other_heard.append(payload)
+		_legacy_heard.append(payload)
 	)
 
 	var connecting: DotResult = await _other_link.connect_to_server("127.0.0.1:%d" % PORT)
@@ -421,6 +467,10 @@ func _test_two_people() -> void:
 	_check(_server.sessions().size() == 2, "the server has two sessions")
 
 	_other = _make_client(_other_side, _other_link)
+	_other.chat.message_received.connect(
+		func(message: DotChatMessage, _channel: StringName) -> void:
+			_other_heard.append(message)
+	)
 
 	var told := await _until(func() -> bool:
 		return _other.bridge != null and _other.bridge.local_occupant_id != 0
@@ -468,13 +518,10 @@ func _test_two_people() -> void:
 
 	# Chat from the second reaches the first, through the server, and becomes a bubble
 	# over the right head — which is the whole of what a lobby is.
-	_other_link.send_chat("hello from Grace")
+	_other.bridge.say(RoomServices.CHANNEL_ALL, "hello from Grace")
 
 	var relayed := await _until(func() -> bool:
-		for payload in _heard:
-			if String(payload.get("text", "")) == "hello from Grace":
-				return true
-		return false
+		return _text_heard(_heard, "hello from Grace")
 	)
 
 	_check(relayed, "and what one says reaches the other")
@@ -541,6 +588,224 @@ func _test_walking() -> void:
 				if on_server != null else -1.0)
 	)
 	_done()
+
+
+## Props, over a real socket, seen by somebody who did not place them.
+##
+## [b]This is the only place a placement crosses a wire.[/b] `dedicated` places props and
+## checks the budget in one process, which proves the book-keeping and nothing about the
+## protocol: the index, the quantised position, the adopted id and the fact that both ends
+## then collide against the same circle are all invisible with one end.
+func _test_props() -> void:
+	_section("props, seen by somebody else")
+
+	var module := _module()
+	var mine := _client.bridge.local_occupant_id
+
+	_client.bridge.ask_to_place(&"bench", Vector2(240.0, -160.0))
+
+	var landed := await _until(func() -> bool:
+		return module.props.count() == 1
+	)
+
+	if not _check(landed, "the server places what a client asked for"):
+		_done()
+		return
+
+	# [b]On BOTH clients, and the second one is the check that matters.[/b] The first
+	# client asked for it, so a bug that echoed the request back locally would look
+	# identical to a bug-free wire — and the person who did not ask is the one who finds
+	# out whether it was actually sent.
+	var seen_by_both := await _until(func() -> bool:
+		return _client.props.count() == 1 and _other.props.count() == 1
+	)
+
+	_check(
+		seen_by_both,
+		"and both clients have it (%d and %d)"
+			% [_client.props.count(), _other.props.count()]
+	)
+
+	var placed_id: int = module.props.placements().keys()[0]
+	var on_server: Vector2 = module.props.placements()[placed_id]["at"]
+	var on_other: Vector2 = _other.props.placements().get(placed_id, {}).get(
+		"at", Vector2(9999, 9999)
+	)
+
+	# [b]The id is adopted, not allocated.[/b] A receiving peer that numbered things
+	# itself would give the same bench two names on two machines, and every count would
+	# still match — the bug dot-2d had to gain `Dot2DScatter.adopt` to fix.
+	_check(
+		_other.props.has(placed_id),
+		"under the id the server gave it, not one the client made up"
+	)
+	_check(
+		on_server.distance_to(on_other) < 1.0,
+		"at the same place (%.2f units apart)" % on_server.distance_to(on_other),
+		"the position is quantised over the same range as a snapshot's, so a mismatch "
+		+ "would be a different position rather than a less precise one"
+	)
+
+	# The thing both ends have to agree about, which is not the drawing.
+	_check(
+		module.props.obstacles().size() == _other.props.obstacles().size(),
+		"and both ends collide against the same number of circles (%d and %d)"
+			% [module.props.obstacles().size(), _other.props.obstacles().size()]
+	)
+
+	# A rug: placed, drawn, and not an obstacle on either end.
+	# [b]After the cooldown, and it is a real one.[/b] A budget alone does not stop a held
+	# key — reach the cap, undo one, place another is a place and a free every frame,
+	# which costs the server more than the props do. `spawn_interval` is dot-props' answer
+	# and this is a test that would otherwise be measuring it rather than the wire.
+	await _settle(int(RoomProps.PLACE_INTERVAL * RoomContent.TICK_RATE) + 10)
+
+	_client.bridge.ask_to_place(&"rug", Vector2(-300.0, 200.0))
+
+	var rugged := await _until(func() -> bool:
+		return _other.props.count() == 2
+	)
+
+	_check(rugged, "a rug reaches the other client too")
+	_check(
+		_other.props.obstacles().size() == 1,
+		"and is not an obstacle on either end (%d solid of %d)"
+			% [_other.props.obstacles().size(), _other.props.count()]
+	)
+
+	_client.bridge.ask_to_undo()
+
+	var undone := await _until(func() -> bool:
+		return _other.props.count() == 1
+	)
+
+	_check(undone, "an undo reaches everybody, not just the person who asked")
+	_check(
+		module.props.count_for(mine) == 1,
+		"and the budget goes back down with it (%d)" % module.props.count_for(mine)
+	)
+	_done()
+
+
+## Voice, over the same socket, relayed by the server to the other person.
+##
+## [b]Headless, with no microphone anywhere.[/b] That is the point of
+## [DotVoiceSource] / [DotVoiceSink] being an interface: the whole path — encode, packet,
+## the router's stamping and rate cap, the wire, the jitter buffer, decode — runs with a
+## buffer at each end and nothing that needs a sound card. dot-voice's own suite exists
+## for that reason and this is the same claim across two processes' worth of sockets.
+func _test_voice() -> void:
+	_section("voice")
+
+	var services := _module().services
+	var config := RoomServices.voice_config()
+
+	_check(
+		_client.voice != null and _client.voice.manager != null,
+		"a client has a voice manager even with no microphone"
+	)
+	_check(
+		not _client.voice.available,
+		"and knows it has no microphone rather than reporting a working one",
+		"AudioServer reports a 44100 Hz mix rate and a Default input device in a "
+		+ "headless run; only get_driver_name() says Dummy"
+	)
+
+	# A frame, built the way the capture path builds one, sent the way the client sends
+	# one. The manager's own send path needs a microphone; the wire does not.
+	var packet := DotVoicePacket.new()
+	packet.channel = DotVoiceRouter.Channel.ALL
+	packet.codec_id = config.codec_id
+	packet.sample_count = config.frame_samples()
+	packet.starts_talk_spurt = true
+	packet.payload = DotVoiceCodec.instance_for(config.codec_id).encode(
+		DotVoiceSourceBuffer.tone(440.0, config.frame_ms / 1000.0, config.sample_rate)
+	)
+
+	var before := services.voice.relayed_packets
+
+	# [b]Several, because a jitter buffer is not a pipe.[/b] It holds `jitter_ms` worth of
+	# frames before it plays any of them — three at this configuration — so one packet
+	# arrives, is buffered, and is correctly played by nobody. A test that sent one and
+	# then asserted somebody was speaking would be asserting that the buffer does not
+	# work.
+	for index in range(8):
+		packet.sequence = index
+		packet.starts_talk_spurt = index == 0
+		_client.bridge.link.send_voice(1, packet.to_bytes())
+		await _settle(2)
+
+	var relayed := await _until(func() -> bool:
+		return services.voice.relayed_packets > before
+	)
+
+	if not _check(relayed, "a frame reaches the server's router"):
+		_done()
+		return
+
+	var heard := await _until(func() -> bool:
+		return _other.voice.active_speakers().size() > 0
+	)
+
+	_check(heard, "and the other client hears somebody")
+
+	# [b]An amplitude, not a frame count.[/b] A count says the packets arrived; this says
+	# they decoded to something. The sink is a buffer rather than an audio device, which
+	# is the only reason a headless run can ask the question at all — and is what
+	# [DotVoiceSink] being an interface is for.
+	_check(
+		_other.voice.buffered_playback,
+		"with playback buffered, because a headless run has no audio device"
+	)
+	_check(
+		_other.voice.heard_rms(_link_peer()) > 0.0,
+		"and what arrived decoded to sound rather than to silence (%.4f rms)"
+			% _other.voice.heard_rms(_link_peer())
+	)
+
+	# [b]Stamped by the server, and this is what stops one client speaking as another.[/b]
+	# The packet went out with speaker 0; what the listener has is the peer that actually
+	# sent it.
+	var speakers := _other.voice.active_speakers()
+	_check(
+		speakers.size() > 0 and int(speakers[0]) == _link_peer(),
+		"stamped with the peer that actually sent it, not with what the packet claimed",
+		"speakers: %s, sender peer: %d" % [str(speakers), _link_peer()]
+	)
+
+	# The sender does not hear themselves. dot-voice's router excludes the speaker, and a
+	# client that heard its own voice back at the round-trip delay would be unusable.
+	_check(
+		_client.voice.active_speakers().size() == 0,
+		"and the speaker does not hear themselves"
+	)
+
+	# A frame of the wrong length is refused rather than relayed. Two peers that disagree
+	# about the format otherwise produce a silence nobody can explain, with the refusal
+	# counted and said to nobody — which is why the format is in one file both ends read.
+	var wrong := DotVoicePacket.new()
+	wrong.channel = DotVoiceRouter.Channel.ALL
+	wrong.codec_id = config.codec_id
+	wrong.sample_count = config.frame_samples() / 2
+	wrong.payload = PackedByteArray()
+	wrong.payload.resize(
+		DotVoiceCodec.instance_for(config.codec_id).bytes_for(wrong.sample_count)
+	)
+
+	var refused_before := services.voice.refused_format
+	_client.bridge.link.send_voice(1, wrong.to_bytes())
+	await _settle(20)
+
+	_check(
+		services.voice.refused_format > refused_before,
+		"a frame of the wrong length is refused rather than relayed"
+	)
+	_done()
+
+
+## Which peer the first client is, from the server's own view of it.
+func _link_peer() -> int:
+	return _module().bridge.peer_for_occupant(_client.bridge.local_occupant_id)
 
 
 func _test_leaving() -> void:

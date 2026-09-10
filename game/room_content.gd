@@ -150,9 +150,23 @@ static func furniture() -> PackedVector3Array:
 static func resolve_furniture(
 	position: Vector2, radius: float, out_normal: Array
 ) -> Vector2:
+	return resolve_circles(position, radius, furniture(), out_normal)
+
+
+## The same resolve against any list of circles.
+##
+## [b]Split out because the furniture is no longer the only thing standing in the
+## room.[/b] [RoomProps] holds what people have placed and it is exactly the same
+## problem — a list of `(x, y, radius)` both ends have to push a walker out of
+## identically — so it is exactly the same function. A second copy of this loop is a
+## second thing that can round differently, and rounding differently is a player being
+## corrected out of a space that looks empty.
+static func resolve_circles(
+	position: Vector2, radius: float, circles: PackedVector3Array, out_normal: Array
+) -> Vector2:
 	var resolved := position
 
-	for piece in furniture():
+	for piece in circles:
 		var centre := Vector2(piece.x, piece.y)
 		var clearance := piece.z + radius
 		var away := resolved - centre
@@ -201,3 +215,92 @@ static func net_config() -> DotNetConfig:
 	# at whatever the default happens to be.
 	config.enable_lag_compensation = false
 	return config
+
+
+## What somebody may wear, as a document with no art in it.
+##
+## [b]In [RoomContent] for the same reason the room's size is: both ends read it.[/b] The
+## server validates a published avatar against these slots and these parts without loading
+## anything, and a client draws the ids it is sent as shapes — see
+## [method RoomRenderer._draw_avatar]. A client holding a different schema would draw a
+## part in the wrong place, or refuse one the server had accepted, and nothing would
+## error on either side.
+##
+## Three slots and eight parts, which is small on purpose. A lobby is where you *choose*
+## how to look before you go and play something, so what matters is that the choosing
+## works end to end — the server refusing something you have not unlocked, the choice
+## surviving a reconnect, and everybody else seeing it. A hundred hats would prove
+## nothing more.
+##
+## [b]One part is not free.[/b] `hat_crown` requires an entitlement, and it is here for
+## the reason game-hungario's `greedy` is: entitlements default to nothing, so a server
+## that granted everything would work perfectly in every test, ship, and quietly be a
+## game where every unlock is free — and nobody reports that as a bug.
+static func avatar_schema() -> DotAvatarSchema:
+	var schema := DotAvatarSchema.new()
+	schema.id = &"room_person"
+	schema.version = 1
+
+	# Layers, low to high: a badge sits on the body, a face over that, a hat over both.
+	# The renderer here draws them in the order it is given rather than by layer, which
+	# is legitimate for three shapes that do not overlap — and the layers are still
+	# correct, because the moment a deployment resolves these to real content it will be a
+	# rig that does honour them.
+	var badge := DotAvatarSlot.make(&"badge")
+	badge.display_name = "Badge"
+	badge.layer = 20
+
+	var face := DotAvatarSlot.make(&"face", true, &"face_plain")
+	face.display_name = "Face"
+	face.layer = 40
+
+	var hat := DotAvatarSlot.make(&"hat")
+	hat.display_name = "Hat"
+	hat.layer = 60
+
+	schema.slots = [badge, face, hat]
+
+	var parts: Array[DotAvatarPart] = []
+
+	for entry in [
+		[&"face_plain", &"face", true, 1],
+		[&"face_wide", &"face", true, 1],
+		[&"face_narrow", &"face", true, 1],
+		[&"hat_cap", &"hat", true, 1],
+		[&"hat_band", &"hat", true, 1],
+		[&"hat_crown", &"hat", false, 1],
+		[&"badge_dot", &"badge", true, 1],
+		[&"badge_ring", &"badge", true, 1],
+	]:
+		var row: Array = entry
+		var part := DotAvatarPart.make(row[0], row[1], bool(row[2]))
+		part.colour_channels = int(row[3])
+		# Everything in the face slot falls back to the plain one, so somebody wearing a
+		# part this build has never heard of is drawn as a person rather than as nothing.
+		# The plain face has no fallback: a part that fell back to itself is a resolution
+		# loop that cannot terminate, which the schema refuses — and which
+		# game-hungario's `headless_round` never noticed for a while because it never
+		# validated a schema.
+		part.fallback_id = (
+			&"face_plain" if row[1] == &"face" and row[0] != &"face_plain" else &""
+		)
+		parts.append(part)
+
+	schema.parts = parts
+	schema.invalidate()
+	return schema
+
+
+## What a person with no stored avatar looks like.
+##
+## [b]Derived from their id, exactly as their colour is.[/b] A client that has not been
+## sent somebody's avatar therefore draws the same guest as everybody else rather than a
+## different one per machine — which is the property that makes a default worth having at
+## all.
+static func default_avatar(occupant_id: int) -> DotAvatar:
+	var avatar := DotAvatar.make(&"room_person")
+	var faces := [&"face_plain", &"face_wide", &"face_narrow"]
+
+	avatar.set_part(&"face", faces[absi(occupant_id) % faces.size()])
+	avatar.set_colour(&"face", 0, Color(0.10, 0.11, 0.14))
+	return avatar

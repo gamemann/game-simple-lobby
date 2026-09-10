@@ -54,9 +54,53 @@ func _initialize() -> void:
 	for i in names.size():
 		world.add_occupant(i + 1, names[i])
 
+	# Props, placed through the real spawner, because a placement drawn from a hand-built
+	# dictionary is a picture of a dictionary. This is the one place anybody looks at what
+	# a bench, a rug and a plant actually come out as — and the family's own record here
+	# is four interface bugs found by a picture and none by an assertion.
+	var props := RoomProps.new()
+	root.add_child(props)
+	props.setup(true, world)
+	props.spawner.limits.spawn_interval = 0.0
+	world.props = props
+
+	props.place(1, &"bench", Vector2(-620.0, -60.0))
+	props.place(1, &"table", Vector2(-500.0, 120.0))
+	props.place(1, &"stool", Vector2(-420.0, 60.0))
+	props.place(2, &"plant", Vector2(250.0, -330.0))
+	props.place(2, &"lamp", Vector2(330.0, -330.0))
+	props.place(2, &"crate", Vector2(-120.0, 380.0))
+	# The two that are not obstacles. A rug drawn at an obstacle's weight would be a rug
+	# people believe they have to walk around.
+	props.place(3, &"rug", Vector2(120.0, 300.0))
+	props.place(3, &"sign", Vector2(620.0, -420.0))
+
 	var renderer := Node2D.new()
 	renderer.set_script(load(RENDERER))
 	renderer.set("world", world)
+	renderer.set("props", props)
+
+	# Avatars, on half the room. [b]Half on purpose[/b]: a picture where everybody is
+	# wearing something cannot show whether somebody wearing nothing still reads as a
+	# person, and a lobby full of guests is the ordinary case.
+	var avatars := {
+		1: [
+			{"slot": "hat", "part": "hat_cap", "colour": Color(0.90, 0.35, 0.30)},
+			{"slot": "face", "part": "face_wide", "colour": Color(0.08, 0.09, 0.11)},
+		],
+		2: [
+			{"slot": "hat", "part": "hat_crown", "colour": Color(0.95, 0.80, 0.30)},
+			{"slot": "badge", "part": "badge_dot", "colour": Color(0.35, 0.75, 0.95)},
+		],
+		3: [{"slot": "face", "part": "face_narrow", "colour": Color(0.08, 0.09, 0.11)}],
+		4: [
+			# A slot this build has no case for, drawn as a mark rather than as nothing.
+			# A player wearing something from a newer catalogue has to be visibly wearing
+			# something, and that branch is only ever looked at here.
+			{"slot": "cape", "part": "cape_long", "colour": Color(0.60, 0.40, 0.85)},
+		],
+	}
+	renderer.set("avatars", avatars)
 	root.add_child(renderer)
 
 	# The whole room in frame, with a margin. A camera that framed the bounds exactly

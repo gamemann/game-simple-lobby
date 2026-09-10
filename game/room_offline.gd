@@ -32,6 +32,24 @@ var server_world: RoomWorld = null
 var server_net: DotNetManager = null
 var server_bridge: RoomBridge = null
 
+## The real chat router, the real moderation manager and the real voice router, on the
+## authority half.
+##
+## [b]Not a stub, and that is the point.[/b] `--offline` used to restate the shape of a
+## chat payload in [method say] because there was nothing to route it; now the same
+## [DotChatRouter] runs, with the same rules, the same channels and the same backlog, and
+## the only thing missing is a [DotServer] to look names up in. A path only one deployment
+## shape reaches is a path nothing has run, and offline is the shape a person looking at
+## this game actually runs.
+var services: RoomServices = null
+
+## What has been put in the room, on the authority half.
+var server_props: RoomProps = null
+
+## The mirroring copy, on the client half. Two [RoomProps], exactly as there are two
+## worlds and two bridges — because the point of this file is that both ends are real.
+var client_props: RoomProps = null
+
 var client_world: RoomWorld = null
 var client_net: DotNetManager = null
 var client_bridge: RoomBridge = null
@@ -92,12 +110,117 @@ func start(display_name: String, seed_value: int = 20260829) -> DotResult:
 	if not joined.ok:
 		return joined
 
+	var serviced := _build_services()
+
+	if not serviced.ok:
+		return serviced
+
 	var added := server_bridge.add_occupant(CLIENT_PEER, CLIENT_OCCUPANT, display_name)
 
 	if not added.ok:
 		return added
 
 	return DotResult.success(self)
+
+
+## The prop layers and the services, once both bridges exist.
+##
+## Built after both ends rather than inside either, because the authority's props have to
+## be able to announce themselves to a client that already has somewhere to put them.
+func _build_services() -> DotResult:
+	server_props = RoomProps.new()
+	server_props.name = "ServerProps"
+	add_child(server_props)
+
+	var placed := server_props.setup(true, server_world)
+
+	if not placed.ok:
+		return placed
+
+	server_world.props = server_props
+
+	client_props = RoomProps.new()
+	client_props.name = "ClientProps"
+	add_child(client_props)
+	client_props.setup(false, client_world)
+	client_world.props = client_props
+
+	server_props.placed.connect(_on_prop_placed)
+	server_props.cleared.connect(server_bridge.broadcast_prop_cleared)
+	server_bridge.place_requested.connect(_on_place_requested)
+	server_bridge.undo_requested.connect(_on_undo_requested)
+
+	services = RoomServices.new()
+	services.name = "Services"
+	services.bridge = server_bridge
+	services.world = server_world
+	# No DotServer offline. [RoomServices] is built for that: names come out of the room
+	# and keys are derived from the occupant id.
+	services.server = null
+	services.service_scope = &"offline"
+	# A punishment file an offline run wrote would be a punishment a real server then
+	# loaded, against a key that means nothing to it. Its own path, deliberately.
+	services.punishments_path = "user://room_punishments_offline.json"
+	add_child(services)
+
+	var ready := services.setup()
+
+	if not ready.ok:
+		return ready
+
+	server_bridge.say_requested.connect(_on_say_requested)
+	server_bridge.voice_requested.connect(_on_voice_requested)
+	services.add_peer(CLIENT_PEER)
+
+	return DotResult.success(null)
+
+
+func _on_prop_placed(place_id: int, def: DotPropDef, at: Vector2) -> void:
+	var entry: Dictionary = server_props.placements().get(place_id, {})
+	server_bridge.broadcast_prop_placed(
+		place_id, def.id, at, float(entry.get("rotation", 0.0)), int(entry.get("owner", 0))
+	)
+
+
+func _on_place_requested(
+	peer_id: int, prop_index: int, at: Vector2, rotation: float
+) -> void:
+	var occupant := server_bridge.occupant_for_peer(peer_id)
+	var prop_id := RoomProps.id_at(prop_index)
+
+	if occupant == null or prop_id == &"":
+		return
+
+	var placed := server_props.place(occupant.id, prop_id, at, rotation)
+
+	if not placed.ok:
+		services.chat.notice(peer_id, placed.error.message, RoomServices.CHANNEL_ALL)
+
+
+func _on_undo_requested(peer_id: int) -> void:
+	var occupant := server_bridge.occupant_for_peer(peer_id)
+
+	if occupant != null and not server_props.undo(occupant.id):
+		services.chat.notice(
+			peer_id, "You have not put anything in the room.", RoomServices.CHANNEL_ALL
+		)
+
+
+func _on_say_requested(peer_id: int, channel_id: StringName, text: String) -> void:
+	var said := services.chat.submit(peer_id, channel_id, text)
+
+	if not said.ok and said.error != null:
+		services.chat.notice(peer_id, said.error.message, channel_id)
+
+
+## A voice frame, relayed by the real router — which offline means straight back.
+##
+## [b]Kept rather than short-circuited.[/b] One client talking to itself is exactly what
+## exercises the encode, the packet header, the router's own stamping and rate cap, and
+## the jitter buffer, in one loop with nothing else running. It is the only place in this
+## game where the whole voice path can be driven deterministically.
+func _on_voice_requested(peer_id: int, payload: PackedByteArray) -> void:
+	services.voice.relay(peer_id, payload)
 
 
 func _build_server() -> DotResult:
@@ -250,24 +373,17 @@ func server_tick(tick: int) -> void:
 	_flush()
 
 
-## Puts a chat line into the offline room, the way dot-server would.
+## Puts a chat line into the offline room, through the real router.
 ##
-## Offline there is no [DotChatManager] to route it, so this is the one place the shape of
-## a chat payload is restated. It is restated as *dot-server's* shape rather than as a
-## convenient one, so [method RoomClient._on_chat] takes the same dictionary either way.
-func say(text: String, from: int = CLIENT_OCCUPANT) -> Dictionary:
-	var occupant := client_world.occupant_for(from)
-
-	# The bubble is not set here. [RoomClient] sets it from the payload, the same way it
-	# does for a line that arrived from a real server — one path, so an offline bubble can
-	# never behave differently from an online one.
-	return {
-		"kind": "all",
-		"userid": from,
-		"name": occupant.display_name if occupant != null else "Guest",
-		"text": text,
-		"admin": false,
-	}
+## [b]It goes over the loopback like everything else.[/b] The client's `SAY` request
+## reaches the authority, [DotChatRouter] applies every rule, and the reply comes back as
+## a `CHAT` event the client's own [DotChatClient] files — the same six steps an online
+## line takes. The previous version of this function restated dot-server's payload shape
+## by hand, which meant the one code path a person running `--offline` exercised was the
+## one path nothing else used.
+func say(text: String, channel_id: StringName = RoomServices.CHANNEL_ALL) -> void:
+	if client_bridge != null:
+		client_bridge.say(channel_id, text)
 
 
 func describe() -> Dictionary:

@@ -27,6 +27,7 @@ var _entered := 0
 var _completed := 0
 
 var _server: DotServer = null
+var _platform: RoomPlatform = null
 
 
 func _ready() -> void:
@@ -60,6 +61,9 @@ func _run() -> void:
 		_test_module()
 		_test_commands()
 		_test_joining()
+		_test_props()
+		_test_services()
+		_test_identity()
 		_test_transport()
 		_test_unload()
 
@@ -167,6 +171,27 @@ func _build(serving: bool) -> bool:
 	var loaded: DotResult = await _server.games.change_game(RoomModule.GAME_ID, "boot")
 
 	if not _check(loaded.ok, "the room's scene loads", str(loaded.error)):
+		return false
+
+	# [b]The identity half, before the modules.[/b] [DotPlatformModule] refuses to load
+	# without a [DotPlatformHub] in the registry, and building the hub is awaited work —
+	# which is why it is here, in the application, rather than inside a module's
+	# `_module_load`, which dot-server's module host does not await.
+	_platform = RoomPlatform.new()
+	_platform.name = "Identity"
+	_platform.directory = "%s/identity" % SERVER_DIR
+	add_child(_platform)
+
+	var identity: DotResult = await _platform.setup()
+
+	if not _check(identity.ok, "profiles and avatars are up", str(identity.error)):
+		return false
+
+	var platform := _server.modules.load_module(
+		"res://addons/dot_platform/dot_platform_module.gd"
+	)
+
+	if not _check(platform.ok, "the platform module loads", str(platform.error)):
 		return false
 
 	var module := _server.modules.load_module("res://game/room_module.gd")
@@ -305,15 +330,27 @@ func _test_joining() -> void:
 		"and is always relevant, because a lobby is smaller than a screen"
 	)
 
-	# The chat bubble comes off dot-server's own event, not off this game's wire. Firing it
-	# is the whole of that path: the module hooks `player_chat` and looks the speaker up by
-	# the `userid` the event carries.
-	_server.events.fire("player_chat", {
-		"userid": 4242, "name": "Ada", "text": "hello", "team_only": false,
-	})
+	# The bubble comes off [DotChatRouter], and the route to it is what this checks:
+	# `submit` applies every rule, `message_accepted` fires, and the module puts the text
+	# over the speaker's head. dot-server's own `player_chat` is cancelled by this module,
+	# so firing that event is now a check that it is cancelled rather than a way in.
+	var said := module.services.chat.submit(9, RoomServices.CHANNEL_ALL, "hello")
+	_check(said.ok, "a line is accepted by the chat router", str(said.error))
 	_check(
 		occupant != null and occupant.bubble_text == "hello",
-		"a chat line reaches the person who said it, through dot-server's event"
+		"and reaches the person who said it, over their own head"
+	)
+
+	# dot-server's own chat path is CANCELLED by this module rather than left running
+	# beside the router. Two paths would be two sets of rules to keep in step, and the one
+	# that skipped the filter would be the one that leaked admin chat — so the check is
+	# that firing dot-server's event does not produce a second delivery.
+	var legacy := _server.events.fire("player_chat", {
+		"userid": 4242, "name": "Ada", "text": "again", "team_only": false,
+	})
+	_check(
+		legacy.cancelled,
+		"dot-server's own chat broadcast is cancelled, so there is exactly one path"
 	)
 
 	# And the module survives one for somebody who is not here, which is every system
@@ -328,6 +365,253 @@ func _test_joining() -> void:
 	_check(
 		module.bridge.behaviour_for(4242) == null,
 		"and takes their entity, not merely their name"
+	)
+	_done()
+
+
+## What people put in the room, and the budget that stops one person filling it.
+func _test_props() -> void:
+	_section("props")
+
+	var module := _module()
+	var props := module.props
+
+	_check(props != null and props.authoritative, "the server holds the prop layer")
+	_check(
+		props.spawner != null and props.spawner.catalogue.size() == 8,
+		"with eight things in the catalogue (%d)"
+			% (props.spawner.catalogue.size() if props.spawner != null else -1)
+	)
+
+	# [b]The wire index has to be stable, and it is sorted as String rather than as
+	# StringName.[/b] `Array.sort()` on a StringName compares interned pointers, so two
+	# peers give the same thing two different indices and hash two different worlds —
+	# dot-net shipped exactly that with message ids and only a browser client could see
+	# it, because every suite in this family runs both ends in one intern table.
+	var ids := RoomProps.wire_ids()
+	var sorted := ids.duplicate()
+	sorted.sort()
+	_check(
+		Array(ids) == Array(sorted),
+		"the wire order is lexicographic, not interned-pointer order"
+	)
+	_check(
+		RoomProps.id_at(RoomProps.index_of(&"bench")) == &"bench",
+		"an id round-trips through its wire index"
+	)
+
+	var placed := props.place(4242, &"bench", Vector2(100.0, 60.0))
+
+	_check(placed.ok, "a bench goes down", str(placed.error))
+	_check(props.count() == 1, "and the room has one thing in it")
+	_check(
+		props.obstacles().size() == 1,
+		"which is an obstacle both ends resolve against"
+	)
+
+	# A rug is a prop and is not an obstacle. The field is read rather than assumed:
+	# dot-props' own sweep found `per_player_frozen` and `size` declared and read by
+	# nothing, which is this family's most repeated bug.
+	props.spawner.limits.spawn_interval = 0.0
+	var rug := props.place(4242, &"rug", Vector2(-200.0, 0.0))
+
+	_check(rug.ok, "a rug goes down too", str(rug.error))
+	_check(
+		props.obstacles().size() == 1,
+		"and is NOT an obstacle (%d solid of %d placed)"
+			% [props.obstacles().size(), props.count()],
+		"a rug you could not stand on is not a rug"
+	)
+
+	# Placed inside the island, which is at the origin with a radius of 150. The
+	# placement is RESOLVED rather than refused: a player aiming at a landmark meant
+	# "next to the landmark", and refusing gives them a button that silently does
+	# nothing near half the room.
+	var inside := props.place(4242, &"stool", Vector2.ZERO)
+	_check(inside.ok, "something aimed at a pillar is placed rather than refused")
+
+	var moved: Vector2 = props.placements()[int(inside.value)]["at"]
+	_check(
+		moved.length() >= 150.0,
+		"and comes out beside it rather than inside it (%.0f units from the centre)"
+			% moved.length()
+	)
+
+	# The budget. Placed as somebody else so this player's three do not count against it.
+	var refused := 0
+
+	for index in range(RoomProps.PER_PLAYER + 4):
+		if not props.place(7777, &"stool", Vector2(400.0, float(index) * 10.0)).ok:
+			refused += 1
+
+	_check(refused > 0, "a per-player budget refuses the rest (%d refused)" % refused)
+	_check(
+		props.count_for(7777) <= RoomProps.PER_PLAYER,
+		"and nobody holds more than it (%d of %d)"
+			% [props.count_for(7777), RoomProps.PER_PLAYER]
+	)
+
+	_check(props.undo(4242), "undo takes back the newest one")
+
+	var cleared := props.clear_owner(7777)
+	_check(cleared > 0, "and a leave clears everything that person put down (%d)" % cleared)
+	_check(
+		props.count_for(7777) == 0,
+		"leaving them holding nothing against their budget"
+	)
+
+	props.clear_all()
+	_check(props.count() == 0, "an admin clear empties the room")
+	_done()
+
+
+## Chat, voice and moderation, and the one join between them that has to work.
+func _test_services() -> void:
+	_section("chat, voice and moderation")
+
+	var services := _module().services
+
+	_check(services != null, "the services are up")
+	_check(
+		services.chat != null and services.chat.channel_ids().size() == 4,
+		"with four chat channels (%d)"
+			% (services.chat.channel_ids().size() if services.chat != null else -1)
+	)
+	_check(
+		services.chat.channel(RoomServices.CHANNEL_NEAR).scope
+			== DotChatChannel.Scope.RADIUS,
+		"one of which is a radius rather than a room"
+	)
+	_check(
+		services.chat.channel(RoomServices.CHANNEL_NEAR).backlog == 0,
+		"and has no backlog, because a line said quietly must not be replayed to a "
+		+ "stranger who was not standing there"
+	)
+
+	# [b]THE join.[/b] dot-chat consults a `dot_mute_source` and dot-moderation publishes
+	# one, and neither imports the other — so the only thing that makes a gag work is
+	# that something is registered under that name. dot-moderation exists because
+	# dot-server's mute is two booleans on a session object and a session dies with its
+	# connection; a gag that did not survive a reconnect would be the one thing the addon
+	# is for not working.
+	_check(
+		DotRegistry.has(DotModerationManager.MUTE_SERVICE),
+		"a mute source is registered, which is the only thing that makes a gag work"
+	)
+	_check(
+		DotRegistry.has(DotModerationManager.BAN_SERVICE),
+		"and a ban source, which dot-server's admission check consults"
+	)
+
+	var gagged: DotResult = await services.moderation.issue(
+		DotPunishment.Kind.GAG, DotPunishmentSubject.for_uid("uid-test"),
+		"testing", "console", 60
+	)
+	_check(gagged.ok, "a gag is issued and stored", str(gagged.error))
+
+	# Round-tripped through the store, because the two ends of a serialisation are
+	# exactly as capable of never meeting as the two ends of a wire — dot-moderation
+	# shipped a voice mute that loaded back as a warning, which enforces nothing.
+	var reloaded := DotModerationManager.new()
+	reloaded.store = DotPunishmentStoreFile.new(services.punishments_path)
+	reloaded.register_mute_source = false
+	reloaded.register_ban_source = false
+	add_child(reloaded)
+	reloaded.load_all()
+
+	var found := reloaded.active_of_kind(
+		DotPunishmentSubject.for_uid("uid-test"), DotPunishment.Kind.GAG
+	)
+	_check(
+		found != null and found.kind == DotPunishment.Kind.GAG,
+		"and comes back off disk as a GAG rather than as a WARN",
+		"the kind is written and read through one table for exactly this reason"
+	)
+	reloaded.queue_free()
+
+	# Voice. The format is what both ends have to agree on and neither can measure.
+	_check(services.voice != null, "the voice router is up")
+	_check(
+		services.voice.config.format_fingerprint()
+			== RoomServices.voice_config().format_fingerprint(),
+		"and its format is the one a client builds from the same file"
+	)
+
+	var packet := DotVoicePacket.new()
+	packet.speaker = 999
+	packet.channel = DotVoiceRouter.Channel.ALL
+	packet.codec_id = &"adpcm"
+	packet.sample_count = services.voice.config.frame_samples()
+	packet.payload = PackedByteArray()
+	packet.payload.resize(
+		DotVoiceCodec.instance_for(&"adpcm").bytes_for(packet.sample_count)
+	)
+
+	var relayed: DotResult = services.voice.relay(9, packet.to_bytes())
+	_check(relayed.ok, "a frame relays", str(relayed.error))
+
+	# [b]Stamped, not trusted.[/b] The packet claimed to be speaker 999; whoever sent it
+	# was peer 9. Without this any client can put words in any other player's mouth and
+	# the only symptom is confusion.
+	_check(
+		services.voice.relayed_packets == 1,
+		"and the router counted it rather than refusing the format"
+	)
+	_done()
+
+
+## Profiles and avatars: ids and a schema, and no art anywhere.
+func _test_identity() -> void:
+	_section("identity")
+
+	_check(_platform.hub != null and _platform.hub.is_ready(), "the platform is up")
+	_check(
+		_server.modules.get_module("platform") != null,
+		"and its module is loaded beside the room's"
+	)
+
+	var schema := RoomContent.avatar_schema()
+	var problems := schema.validate_schema()
+
+	# [b]A schema that validates is not a formality.[/b] game-hungario shipped a part
+	# that was its own fallback — a resolution loop that cannot terminate — and its suite
+	# never noticed, because it never validated a schema.
+	_check(problems.ok, "the avatar schema is valid", str(problems.error))
+
+	var legal := DotAvatar.make(&"room_person")
+	legal.set_part(&"face", &"face_wide")
+	legal.set_part(&"hat", &"hat_cap")
+
+	var checked := schema.validate(legal, DotAvatarEntitlements.none())
+	_check(checked.ok, "a free avatar is accepted with no entitlements at all")
+
+	var locked := DotAvatar.make(&"room_person")
+	locked.set_part(&"face", &"face_plain")
+	locked.set_part(&"hat", &"hat_crown")
+
+	# [b]Entitlements default to nothing and that default is the important one.[/b] A
+	# server that granted everything would work perfectly in every test, ship, and
+	# quietly be a game where every unlock is free — and nobody reports that as a bug.
+	_check(
+		not schema.validate(locked, DotAvatarEntitlements.none()).ok,
+		"and one nobody has unlocked is refused"
+	)
+	_check(
+		schema.validate(locked, DotAvatarEntitlements.of([&"hat_crown"])).ok,
+		"until they hold it"
+	)
+
+	# The whole point of the document: a server decides all of that without loading
+	# anything. If this ever needs a `load()`, that is the thing to push back on.
+	var drawn := RoomContent.default_avatar(4242)
+	_check(
+		drawn.filled_slots().size() > 0,
+		"a person with no stored avatar still has one, derived from their id"
+	)
+	_check(
+		RoomContent.default_avatar(4242).digest()
+			== RoomContent.default_avatar(4242).digest(),
+		"and it is the same on every machine, which is why a default is worth having"
 	)
 	_done()
 

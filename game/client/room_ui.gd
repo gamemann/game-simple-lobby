@@ -20,6 +20,12 @@ const CHANNEL := "room.ui"
 ## Somebody pressed Enter with text in the box.
 signal chat_submitted(text: String)
 
+## Somebody clicked something in the prop palette and then somewhere in the room.
+signal place_requested(prop_id: StringName, at: Vector2)
+
+## Somebody asked for the last thing they placed back.
+signal undo_requested()
+
 ## The entry took or lost the keyboard. [RoomInput] is disabled while it holds it.
 signal typing_changed(typing: bool)
 
@@ -35,6 +41,26 @@ const MARGIN := 16.0
 const ROSTER_WIDTH := 244.0
 const CHAT_WIDTH := 460.0
 const CHAT_HEIGHT := 212.0
+
+## The chat client this reads channels and history from. Set by [RoomClient].
+##
+## [b]Read, never written.[/b] Everything that decides what a line is — the channel, the
+## colour, the prefix, the order — is [DotChatClient]'s and the server's above it. This
+## draws what it is given, which is the same division [RoomRenderer] has with the world.
+var chat: DotChatClient = null
+
+## The prop palette, in the order [method RoomProps.wire_ids] gives.
+var _palette: HBoxContainer = null
+
+## What is selected in the palette, or empty for "not placing anything".
+var _held: StringName = &""
+
+## The channel a typed line goes to. Cycled with Tab while typing.
+var _channel: StringName = RoomServices.CHANNEL_ALL
+
+var _channel_label: Label = null
+var _talking: Label = null
+var _voice_note: Label = null
 
 var _log: VBoxContainer = null
 var _scroll: ScrollContainer = null
@@ -133,6 +159,14 @@ func _build() -> void:
 	_log.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_scroll.add_child(_log)
 
+	_channel_label = Label.new()
+	_channel_label.name = "Channel"
+	# Above the entry rather than inside it: a player has to be able to see which channel
+	# they are about to speak on BEFORE they press Enter, and a placeholder disappears the
+	# moment they start typing — which is exactly when it matters.
+	_channel_label.add_theme_color_override("font_color", Color(0.72, 0.76, 0.82))
+	chat_box.add_child(_channel_label)
+
 	_entry = LineEdit.new()
 	_entry.placeholder_text = "Press Enter to talk"
 	_entry.max_length = 240
@@ -146,6 +180,23 @@ func _build() -> void:
 	_entry.focus_exited.connect(_stop_typing)
 	chat_box.add_child(_entry)
 
+	_build_palette()
+	_set_channel(_channel)
+
+	_talking = Label.new()
+	_talking.name = "Talking"
+	_talking.anchor_left = 0.0
+	_talking.anchor_top = 1.0
+	_talking.anchor_bottom = 1.0
+	_talking.offset_left = MARGIN
+	_talking.offset_top = -(CHAT_HEIGHT + MARGIN + 26.0)
+	_talking.offset_bottom = -(CHAT_HEIGHT + MARGIN + 4.0)
+	_talking.add_theme_color_override("font_color", Color(0.55, 0.90, 0.60))
+	_talking.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_talking.visible = false
+	_talking.text = "● talking"
+	add_child(_talking)
+
 	_status = Label.new()
 	_status.name = "Status"
 	# Centred across the whole width rather than a fixed box offset from the middle: a
@@ -156,6 +207,165 @@ func _build() -> void:
 	_status.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_status.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(_status)
+
+
+## The palette: one button per thing that can be put in the room.
+##
+## [b]Built from [method RoomProps.wire_ids] rather than from the catalogue's own
+## order.[/b] That is the sorted order the wire index is taken from, so the button at
+## position three and the index at position three are the same thing by construction —
+## and a palette built from `catalogue().props` would drift from it the first time
+## somebody inserted a definition in the middle. dot-net shipped exactly that class of bug
+## with message ids.
+##
+## [b]A [Button] each, not a container.[/b] A Button is focusable and a VBoxContainer is
+## not, so Godot's own focus neighbours make the palette usable with a gamepad or the
+## arrow keys for free — which is game-playground's finding about its spawn menu, and the
+## failure dot-ui's `initial_focus` exists to prevent.
+func _build_palette() -> void:
+	_palette = HBoxContainer.new()
+	_palette.name = "Palette"
+	_palette.anchor_left = 0.5
+	_palette.anchor_right = 0.5
+	_palette.anchor_top = 1.0
+	_palette.anchor_bottom = 1.0
+	_palette.offset_left = -300.0
+	_palette.offset_right = 300.0
+	_palette.offset_top = -(MARGIN + 34.0)
+	_palette.offset_bottom = -MARGIN
+	_palette.alignment = BoxContainer.ALIGNMENT_CENTER
+	add_child(_palette)
+
+	var catalogue := RoomProps.shared_catalogue()
+
+	for id in RoomProps.wire_ids():
+		var def := catalogue.get_prop(StringName(id))
+
+		if def == null:
+			continue
+
+		var button := Button.new()
+		button.name = id
+		button.text = def.name_or_id()
+		button.toggle_mode = true
+		button.tooltip_text = "Click, then click in the room. Backspace undoes."
+		button.add_theme_color_override("font_color", RoomProps.colour_of(def))
+		button.set_meta("prop_id", def.id)
+		button.pressed.connect(_on_palette_pressed.bind(def.id))
+		_palette.add_child(button)
+
+
+func _on_palette_pressed(prop_id: StringName) -> void:
+	# One at a time. A palette where two things are lit is a palette where the player does
+	# not know what the next click will put down.
+	_held = &"" if _held == prop_id else prop_id
+	_sync_palette()
+
+
+func _sync_palette() -> void:
+	if _palette == null:
+		return
+
+	for child in _palette.get_children():
+		var button := child as Button
+
+		if button != null:
+			button.button_pressed = button.get_meta("prop_id", &"") == _held
+
+
+## What the player has selected, or empty.
+func held_prop() -> StringName:
+	return _held
+
+
+## Puts the palette down. Called when a placement is made and when Escape is pressed.
+func clear_held() -> void:
+	_held = &""
+	_sync_palette()
+
+
+## Asks for something to be placed. Called by [RoomClient] with a world position.
+func place_at(at: Vector2) -> bool:
+	if _held == &"":
+		return false
+
+	place_requested.emit(_held, at)
+	return true
+
+
+## Draws the talking indicator.
+func set_talking(talking: bool) -> void:
+	if _talking != null:
+		_talking.visible = talking
+
+
+## Says why there is no microphone, once, in the log rather than in a dialog.
+func note_voice(available: bool, reason: String) -> void:
+	if available:
+		add_notice("Hold V to talk.", Color(0.60, 0.78, 0.70))
+		return
+
+	add_notice(
+		"No microphone: %s You can still hear everybody." % reason,
+		Color(0.78, 0.72, 0.58)
+	)
+
+
+# --- Channels ---------------------------------------------------------------
+
+## Which channel a typed line goes to.
+func active_channel() -> StringName:
+	return _channel
+
+
+## Cycles to the next channel the player may speak on.
+##
+## [b]Admin-only channels are skipped rather than refused.[/b] A player who can tab onto a
+## channel every line of which is rejected has a control that appears broken; one who
+## cannot tab onto it has never heard of it, which is also the right answer.
+func cycle_channel() -> void:
+	var ids := _speakable_channels()
+
+	if ids.is_empty():
+		return
+
+	var index := ids.find(String(_channel))
+	_set_channel(StringName(ids[(index + 1) % ids.size()]))
+
+
+func _speakable_channels() -> PackedStringArray:
+	var out := PackedStringArray()
+
+	for channel in RoomServices.chat_channels():
+		# The whisper channel is DIRECT and needs a target, so it is not something Tab
+		# can land on: a whisper with nobody addressed is a line that goes nowhere.
+		if channel.admin_only or channel.scope == DotChatChannel.Scope.DIRECT:
+			continue
+
+		out.append(String(channel.id))
+
+	return out
+
+
+func _set_channel(id: StringName) -> void:
+	_channel = id
+
+	if _channel_label == null:
+		return
+
+	var chan: DotChatChannel = null
+
+	for channel in RoomServices.chat_channels():
+		if channel.id == id:
+			chan = channel
+			break
+
+	if chan == null:
+		_channel_label.text = "Talking to: %s" % String(id)
+		return
+
+	_channel_label.text = "Talking to: %s   (Tab to change)" % chan.display_name
+	_channel_label.add_theme_color_override("font_color", chan.colour)
 
 
 # --- Typing ----------------------------------------------------------------
@@ -169,9 +379,21 @@ func _unhandled_input(event: InputEvent) -> void:
 	if key.keycode == KEY_ENTER or key.keycode == KEY_KP_ENTER:
 		start_typing()
 		get_viewport().set_input_as_handled()
-	elif key.keycode == KEY_ESCAPE and is_typing():
-		_entry.text = ""
-		_stop_typing()
+	elif key.keycode == KEY_TAB and is_typing():
+		cycle_channel()
+		get_viewport().set_input_as_handled()
+	elif key.keycode == KEY_ESCAPE:
+		if is_typing():
+			_entry.text = ""
+			_stop_typing()
+		else:
+			# Escape with nothing being typed puts the palette down. One key for "stop
+			# what you are doing" rather than two that do almost the same thing.
+			clear_held()
+
+		get_viewport().set_input_as_handled()
+	elif key.keycode == KEY_BACKSPACE and not is_typing():
+		undo_requested.emit()
 		get_viewport().set_input_as_handled()
 
 
@@ -213,40 +435,59 @@ func _on_submitted(text: String) -> void:
 
 # --- Content ---------------------------------------------------------------
 
-## Adds a chat line.
+## Adds a chat line, as [DotChatClient] filed it.
 ##
-## [param payload] is dot-server's, verbatim: `kind`, `userid`, `name`, `text`, `admin`.
-func add_chat(payload: Dictionary) -> void:
-	var speaker := String(payload.get("name", ""))
-	var text := String(payload.get("text", ""))
-	var kind := String(payload.get("kind", "all"))
-	var userid := int(payload.get("userid", 0))
-
-	if text == "":
+## [b]The channel decides how it is drawn, and the channel is a document rather than a
+## flag.[/b] Its prefix and its colour come off the [DotChatChannel] both ends share, so
+## adding a channel is adding a definition — there is no `if kind == "team"` here to
+## forget to extend, which is what this function used to be.
+func add_message(message: DotChatMessage, channel_id: StringName) -> void:
+	if message == null or message.text == "":
 		return
+
+	var chan := chat.channel(channel_id) if chat != null else null
 
 	var line := Label.new()
 	line.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	line.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 
-	if speaker == "":
-		# A system message: a kick, a game change, a vote result. Distinguished by
-		# having no speaker rather than by a flag, because that is how dot-server sends
-		# one and inventing a second signal for it would be a second thing to keep true.
-		line.text = text
-		line.add_theme_color_override("font_color", Color(0.65, 0.72, 0.80))
-	else:
-		line.text = "%s: %s" % [speaker, text]
-		line.add_theme_color_override(
-			"font_color",
-			Color(1.0, 0.82, 0.35) if bool(payload.get("admin", false))
-			else RoomContent.colour_for(userid).lightened(0.25)
-		)
+	var prefix := ""
 
-	if kind == "team":
-		line.text = "(team) " + line.text
+	if chan != null and chan.prefix != "":
+		prefix = chan.prefix + " "
 
+	match message.kind:
+		DotChatMessage.Kind.ACTION:
+			# "* Ada waves" rather than "Ada: waves". The whole point of the form.
+			line.text = "%s* %s %s" % [prefix, message.sender_name, message.text]
+		DotChatMessage.Kind.WHISPER:
+			line.text = "%s%s: %s" % [prefix, message.sender_name, message.text]
+		DotChatMessage.Kind.SAY:
+			line.text = "%s%s: %s" % [prefix, message.sender_name, message.text]
+		_:
+			# A system line, a join, a leave, an admin announcement. No speaker, and
+			# attributing one would put the server's words in somebody's mouth.
+			line.text = "%s%s" % [prefix, message.text]
+
+	line.add_theme_color_override("font_color", _colour_for(message, chan))
 	_append(line)
+
+
+## What colour a line is drawn in.
+##
+## A player's own colour comes from the same derivation the circle over their head does,
+## so the name in the log and the person in the room match — which is the only reason a
+## derived colour beats an assigned one in a game with no profiles.
+func _colour_for(message: DotChatMessage, chan: DotChatChannel) -> Color:
+	if message.is_from_server():
+		return chan.colour if chan != null else Color(0.65, 0.72, 0.80)
+
+	var occupant_id := int(message.meta.get("o", 0))
+
+	if occupant_id > 0:
+		return RoomContent.colour_for(occupant_id).lightened(0.25)
+
+	return chan.colour if chan != null else Color(0.85, 0.88, 0.92)
 
 
 ## Adds a line nobody said: joins, leaves, connection state.

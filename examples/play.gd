@@ -29,6 +29,29 @@ var _address_entry: LineEdit = null
 var _name_entry: LineEdit = null
 var _panel: Control = null
 
+## The server list. Built on demand: a person who followed a link straight into a room
+## never opens it, and a [DotBrowser] that exists is a [DotBrowser] sending UDP.
+var _browser: RoomBrowser = null
+
+## Who this person is, when there is a backbone to ask.
+##
+## [b]Signed in without a code on screen, or not at all.[/b] `sign_in()` tries the page
+## handoff, then a stored session, and then falls through to a device-code login — two
+## backbone requests for a flow with no code shown and nobody to read it. dot-server-setup-test
+## shipped exactly that and it is what made a wrong default domain visible. So this asks
+## for the quiet halves only, and a person who has never signed in stays a guest, which is
+## what a lobby is for.
+var _auth: DotAuthClient = null
+
+## Content delivered at runtime, when a server names a pack.
+##
+## [b]Registered even when nothing is delivered.[/b] dot-cloud shipped a bug where
+## [DotCloudClient] never published itself in [DotRegistry] and four call sites across
+## dot-server and dot-user-avatar all found null — none of which errored, because every
+## one treats an absent cloud as "this deployment ships its content in the build", which
+## is a legitimate configuration and therefore indistinguishable from the bug.
+var _cloud: DotCloudClient = null
+
 
 func _ready() -> void:
 	DotLog.set_level(
@@ -41,7 +64,15 @@ func _ready() -> void:
 	_root.name = "Game"
 	add_child(_root)
 
+	# A bare statement call, not an await: this menu must be on screen whether or not a
+	# content store answers, and nothing here needs the answer.
+	_build_cloud()
 	_build_menu()
+
+	# Started before anything else so a stored session is already resolved by the time
+	# somebody presses Join. Not awaited: a backbone that is slow or absent must not hold
+	# up a menu, and the answer only changes what name a guest is given.
+	_sign_in()
 
 	if _has_arg("--offline"):
 		_start_offline()
@@ -51,6 +82,81 @@ func _ready() -> void:
 
 	if address != "":
 		_connect_to(address)
+
+
+## The content client, registered so anything that wants one can find it.
+##
+## A lobby that ships inside its own build never uses this; a lobby *delivered* as a pack
+## is what this game exists to be, and in that deployment the shell mounts the pack before
+## this scene exists at all. What this covers is the third case: a server that ships this
+## room in the build and delivers something else — a map, a set of avatar parts — and
+## needs somewhere to put it.
+func _build_cloud() -> void:
+	_cloud = DotCloudClient.new()
+	_cloud.name = "Cloud"
+	add_child(_cloud)
+
+	var ready: DotResult = await _cloud.start()
+
+	if not ready.ok:
+		# Not fatal. Every consumer treats an absent cloud as "this deployment ships its
+		# content in the build", which is true here — the failure to be loud about is the
+		# one where a cloud is expected and is quietly not there.
+		DotLog.warn(
+			"room.play", "content delivery is unavailable", {"why": str(ready.error)}
+		)
+
+
+## Signs in if there is already a session, and stays a guest if there is not.
+func _sign_in() -> void:
+	_auth = DotAuthClient.new()
+	_auth.name = "Auth"
+	add_child(_auth)
+
+	var started := _auth.start()
+
+	if not started.ok:
+		DotLog.info("room.play", "authentication is unavailable; joining as a guest", {
+			"why": str(started.error),
+		})
+		return
+
+	# [b]The page handoff and a stored session, and deliberately NOT `sign_in()`.[/b]
+	# That one falls through to `start_device_login()` when neither works — two backbone
+	# requests on every launch for a flow with no code on screen and nobody to read it.
+	# dot-server-setup-test shipped exactly that, and those two requests are what made a
+	# wrong default backbone domain visible in a network tab.
+	if _auth.web_handoff and DotAuthWebHandoff.supported():
+		var handed: DotResult = await _auth.try_web_handoff()
+
+		if not handed.ok:
+			DotLog.debug("room.play", "no usable handoff from the page")
+
+	if not _auth.is_signed_in() and _auth.store != null \
+			and _auth.store.has_credentials():
+		var restored: DotResult = await _auth.restore_session()
+
+		if not restored.ok:
+			DotLog.info("room.play", "a stored session did not work; staying a guest", {
+				"why": restored.code(),
+			})
+
+	var identity := _auth.identity()
+
+	if identity == null:
+		return
+
+	var known := identity.display_name
+
+	if known != "" and _name_entry != null:
+		# [b]Only when the box still holds the generated name.[/b] Somebody who typed
+		# something meant it, and a login landing a second later that overwrote it would
+		# be the most annoying possible bug in this menu.
+		if _name_entry.text.begins_with("Guest "):
+			_name_entry.text = known
+
+	if _status != null:
+		_status.text = "Signed in as %s." % known
 
 
 func _has_arg(flag: String) -> bool:
@@ -129,6 +235,11 @@ func _build_menu() -> void:
 	join.pressed.connect(func() -> void: _connect_to(_address_entry.text))
 	box.add_child(join)
 
+	var find := Button.new()
+	find.text = "Find a room"
+	find.pressed.connect(_open_browser)
+	box.add_child(find)
+
 	# [b]No Host button.[/b] A browser tab cannot listen, and offering a control that
 	# fails on the platform this game exists for is worse than not offering it. Offline is
 	# offered instead, and it says what it is.
@@ -158,6 +269,27 @@ func _build_menu() -> void:
 	join.grab_focus.call_deferred()
 
 
+## Opens the server list, building it the first time.
+##
+## [b]Built on demand, and it is not laziness.[/b] A [DotBrowser] that exists is one that
+## refreshes itself on a timer, which is a UDP packet to every server it knows about — and
+## a person who followed a link straight into a room never opens this at all.
+func _open_browser() -> void:
+	if _browser == null:
+		_browser = RoomBrowser.new()
+		_browser.name = "Rooms"
+		# Inside the same panel the menu is in, so hiding the menu hides both and there is
+		# one thing that decides whether a person is looking at a menu or at a room.
+		_panel.add_child(_browser)
+		_browser.joined.connect(func(address: String) -> void:
+			_browser.visible = false
+			_connect_to(address)
+		)
+		return
+
+	_browser.visible = not _browser.visible
+
+
 func _spacer(height: int) -> Control:
 	var spacer := Control.new()
 	spacer.custom_minimum_size = Vector2(0, height)
@@ -167,6 +299,12 @@ func _spacer(height: int) -> Control:
 func _set_menu_visible(shown: bool) -> void:
 	if _panel != null:
 		_panel.visible = shown
+
+	# The list stops refreshing with the menu. A browser polling six servers every eight
+	# seconds while somebody is standing in a room is bandwidth spent on a screen nobody
+	# is looking at — and it is `visible` that [method RoomBrowser._process] checks.
+	if _browser != null and not shown:
+		_browser.visible = false
 
 
 # --- Starting --------------------------------------------------------------

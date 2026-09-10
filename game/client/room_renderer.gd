@@ -17,6 +17,24 @@ var world: RoomWorld = null
 ## Which occupant is the local one, so they can be marked. Zero before the hello.
 var local_occupant_id: int = 0
 
+## What people have put in the room. Null on a client that has not been told yet.
+##
+## [b]Read from the same object the simulation collides against.[/b] A renderer with its
+## own list of props is a client drawing a bench the server is not simulating — and the
+## symptom is not a missing bench, it is a player corrected out of a space that looks
+## empty. This game has already made that argument about the furniture; this is the same
+## argument about the half of the level that people place.
+var props: RoomProps = null
+
+## occupant id -> the avatar rows the server sent: `slot`, `part`, `colour`.
+##
+## [b]Ids and colours, and nothing else.[/b] dot-user-avatar's whole claim is that an
+## avatar is a bounded document a server validates without loading a part, and this is the
+## client end of that: a lobby that ships no art draws the ids as shapes, and a deployment
+## with content resolves them through [DotAvatarCatalogue] instead. Neither end downloads
+## anything to know whether an avatar is legal.
+var avatars: Dictionary = {}
+
 @export_group("Palette")
 
 @export var floor_colour: Color = Color(0.10, 0.11, 0.14, 1.0)
@@ -57,6 +75,9 @@ func _draw() -> void:
 	draw_rect(bounds, floor_colour, true)
 	_draw_grid(bounds)
 	_draw_furniture()
+	# Under the walls and over the built-in furniture: a placed prop is a thing standing
+	# in the room, and the room's edge is still the room's edge.
+	_draw_props()
 	draw_rect(bounds, wall_colour, false, 3.0)
 
 	var now := Time.get_ticks_msec()
@@ -98,6 +119,53 @@ func _draw_furniture() -> void:
 		draw_arc(centre, piece.z, 0.0, TAU, 48, wall_colour, 2.0)
 
 
+## Everything people have put in the room.
+##
+## [b]Drawn from the definition, exactly as its collision is derived from it.[/b] A rug
+## has a radius of zero and is drawn flat and wide; everything else is drawn at the radius
+## it is actually collided against, so what a player walks around is what they can see.
+## The alternative — a decorative size and a separate collision size — is the one thing
+## this file's own doc comment says a renderer must not do.
+func _draw_props() -> void:
+	if props == null:
+		return
+
+	for entry in props.placements().values():
+		var placement: Dictionary = entry
+		var def: DotPropDef = placement["def"]
+		var at: Vector2 = placement["at"]
+		var colour := RoomProps.colour_of(def)
+		var radius := RoomProps.radius_of(def)
+
+		if radius <= 0.0:
+			# [b]Something you walk over, and it has to LOOK like it.[/b] The first
+			# version drew these at a fixed size, filled at a third opacity with a solid
+			# rim — and a picture showed a rug that read as a dark disc of exactly the
+			# weight the furniture has, and a sign the size of a bollard. Nothing about
+			# that was visible in any assertion: the radius was zero, the obstacle list
+			# was right, and both ends agreed.
+			#
+			# So: no shadow, no rim, a much fainter fill, and a dotted edge — three cues
+			# that all say floor. The size comes from the definition, because a rug and a
+			# sign are not the same size and only the catalogue knows.
+			var flat := RoomProps.footprint_of(def)
+
+			draw_circle(at, flat, Color(colour, 0.20))
+
+			# Drawn as separated arcs rather than a ring: a continuous outline is what a
+			# solid thing has, and it is the single strongest cue that something is in
+			# the way.
+			for step in range(12):
+				var from := float(step) * TAU / 12.0
+				draw_arc(at, flat, from, from + TAU / 22.0, 4, Color(colour, 0.5), 1.5)
+
+			continue
+
+		draw_circle(at + Vector2(0.0, radius * 0.3), radius * 0.95, Color(0, 0, 0, 0.22))
+		draw_circle(at, radius, colour)
+		draw_arc(at, radius, 0.0, TAU, 40, colour.darkened(0.35), 2.0)
+
+
 func _draw_grid(bounds: Rect2) -> void:
 	var step := RoomContent.FLOOR_GRID
 	var x := ceilf(bounds.position.x / step) * step
@@ -128,6 +196,8 @@ func _draw_occupant(occupant: RoomOccupant, _now: int) -> void:
 	var facing := Vector2.RIGHT.rotated(occupant.state.facing)
 	draw_circle(at + facing * radius * 0.55, radius * 0.26, colour.lightened(0.55))
 
+	_draw_avatar(occupant, at, radius)
+
 	if occupant.id == local_occupant_id:
 		# A ring rather than a different colour, because the colour is how everybody else
 		# recognises you and changing it for one viewer means no two people see the same
@@ -153,6 +223,42 @@ func _draw_occupant(occupant: RoomOccupant, _now: int) -> void:
 		_font, baseline, text,
 		HORIZONTAL_ALIGNMENT_LEFT, -1, _font_size, name_colour
 	)
+
+
+## Somebody's avatar, on top of the circle that is them.
+##
+## [b]This ships no art, so a part id becomes a shape.[/b] That is not a placeholder for
+## something better: a lobby drawing a hat as a coloured arc and a deployment drawing it
+## as a mesh are reading the same document, and the whole point of dot-user-avatar is that
+## the document is the thing that travels. The slot decides where it goes and the id
+## decides nothing at all here — which is honest, and is why a part this build has never
+## heard of still draws as *something* rather than vanishing.
+##
+## Three slots are understood. Anything else is drawn as a small mark beside the head, so
+## a player wearing something from a newer catalogue is visibly wearing something.
+func _draw_avatar(occupant: RoomOccupant, at: Vector2, radius: float) -> void:
+	var rows: Variant = avatars.get(occupant.id)
+
+	if not (rows is Array):
+		return
+
+	for value in (rows as Array):
+		var row: Dictionary = value
+		var tint: Color = row.get("colour", Color.WHITE)
+
+		match String(row.get("slot", "")):
+			"hat":
+				# An arc across the top of the head, thick enough to read at this size.
+				draw_arc(
+					at, radius * 0.86, PI * 1.15, PI * 1.85, 20, tint, radius * 0.28
+				)
+			"face":
+				draw_circle(at + Vector2(-radius * 0.22, -radius * 0.12), radius * 0.12, tint)
+				draw_circle(at + Vector2(radius * 0.22, -radius * 0.12), radius * 0.12, tint)
+			"badge":
+				draw_circle(at + Vector2(radius * 0.55, radius * 0.45), radius * 0.24, tint)
+			_:
+				draw_circle(at + Vector2(0.0, -radius * 1.05), radius * 0.16, tint)
 
 
 func _draw_bubble(occupant: RoomOccupant, now: int) -> void:

@@ -159,6 +159,16 @@ func _any_pressed(keys: Array[Key]) -> bool:
 	return false
 
 
+## Screen position to world position, for anything outside this class.
+##
+## [b]Public because placing a prop needs exactly this and nothing else this class
+## does.[/b] A second conversion written in [RoomClient] would be a second thing to get
+## wrong when the camera is re-fitted — and it is re-fitted every time somebody rotates a
+## phone or drags a browser window.
+func to_world(viewport: Viewport, camera: Camera2D, at: Vector2) -> Vector2:
+	return _to_world(viewport, camera, at)
+
+
 ## Screen position to world position.
 ##
 ## Through the camera's own transform rather than by arithmetic on its zoom, so this stays

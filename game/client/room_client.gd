@@ -46,6 +46,22 @@ var input: RoomInput = null
 var renderer: RoomRenderer = null
 var ui: RoomUi = null
 
+## The client half of chat: the channels, the history, the unread counts and the gap
+## detection. [b]It decides nothing[/b] — every rule is the server's — and it exists so
+## the interface has somewhere to read a channel's last fifty lines from without keeping
+## its own copy of them.
+var chat: DotChatClient = null
+
+## The client half of voice. Null on a build with no audio at all; every call on it is
+## guarded, because "there is no microphone" is a legitimate machine rather than an error.
+var voice: RoomVoice = null
+
+## What people have put in the room, mirrored. Both ends collide against it.
+var props: RoomProps = null
+
+## occupant id -> the avatar rows the server sent. Drawn by [RoomRenderer].
+var _avatars: Dictionary = {}
+
 var _camera: Camera2D = null
 var _tick: int = 0
 var _roster_dirty: bool = true
@@ -63,6 +79,7 @@ var _offline: RoomOffline = null
 
 
 func _ready() -> void:
+	_build_chat()
 	_build_view()
 
 	# The link is found rather than required. A client scene instantiated by a shell has
@@ -76,19 +93,72 @@ func _ready() -> void:
 	else:
 		_build_offline()
 
+	# After the bridge exists either way, because both of them need somewhere to send.
+	_build_voice()
+
 	get_viewport().size_changed.connect(_frame_room)
 	_frame_room()
 
 
 func _exit_tree() -> void:
 	if link != null and is_instance_valid(link):
-		if link.chat_received.is_connected(_on_chat):
-			link.chat_received.disconnect(_on_chat)
 		if link.disconnected.is_connected(_on_disconnected):
 			link.disconnected.disconnect(_on_disconnected)
 
 
 # --- Building --------------------------------------------------------------
+
+## The chat client, before the interface, because the interface reads its channels.
+func _build_chat() -> void:
+	chat = DotChatClient.new()
+	chat.name = "Chat"
+	# The same channel definitions the server routes with. [b]Shared rather than sent[/b],
+	# for the room-size reason: a client holding a different set would show a line on a
+	# channel it has no colour or prefix for, and the failure is a message that is
+	# silently unattributed rather than one that is missing.
+	chat.channels = RoomServices.chat_channels()
+	chat.rules = RoomServices.chat_rules()
+	chat.history_limit = 400
+	# Two clients in one process — `examples/sandbox.tscn` — would otherwise collide on
+	# the registry name and one of them would be invisible to whatever asked for it.
+	chat.register_as = &""
+	add_child(chat)
+
+	chat.start()
+	chat.message_received.connect(_on_chat_message)
+
+
+## Voice, once there is a bridge to send through.
+##
+## [b]Capture is off in a headless run and that is not a special case[/b] — it is what
+## [method DotVoiceSourceMicrophone.is_supported] answers, and it answers it by asking
+## `AudioServer.get_driver_name()` rather than any of the three properties that report a
+## working sound card on a machine with none.
+func _build_voice() -> void:
+	if bridge == null:
+		return
+
+	voice = RoomVoice.new()
+	voice.name = "Voice"
+	voice.send_fn = func(bytes: PackedByteArray) -> void:
+		if bridge != null and bridge.link != null:
+			# The peer is ignored on a client — every frame goes to the authority — and
+			# it is passed as 1 rather than 0 because in this family zero has meant
+			# "everybody" often enough to be worth never writing by accident.
+			bridge.link.send_voice(1, bytes)
+	add_child(voice)
+
+	voice.setup(not DotPlatform.is_headless())
+
+	bridge.voice_arrived.connect(voice.receive)
+	voice.talking_changed.connect(func(talking: bool) -> void:
+		ui.set_talking(talking)
+	)
+
+	# Said once, in the log, rather than swallowed. A player whose microphone was refused
+	# and who is told nothing spends the evening believing voice is broken for everybody.
+	ui.note_voice(voice.available, voice.unavailable_reason)
+
 
 func _build_view() -> void:
 	_camera = Camera2D.new()
@@ -112,18 +182,31 @@ func _build_view() -> void:
 	ui.name = "Room"
 	layer.add_child(ui)
 
+	ui.chat = chat
 	ui.chat_submitted.connect(_on_chat_submitted)
+	ui.place_requested.connect(_on_place_requested)
+	ui.undo_requested.connect(func() -> void:
+		if bridge != null:
+			bridge.ask_to_undo()
+	)
 	# The one wiring that matters: while a text field has the keyboard, WASD is text.
 	ui.typing_changed.connect(func(typing: bool) -> void:
 		input.enabled = not typing
 		if typing:
 			input.release()
+			# The microphone closes with the keyboard. Otherwise the key-up for the talk
+			# key lands in the text field, the gate is never closed, and the player is
+			# broadcasting whatever they say while typing — which is the one voice bug
+			# people report as "everyone could hear me" rather than as a bug.
+			if voice != null:
+				voice.release()
 	)
 
 
 ## The normal case: a mirroring world behind a real connection.
 func _build_online() -> void:
 	world = _make_world()
+	world.props = _make_props()
 	renderer.world = world
 
 	var config := RoomContent.net_config()
@@ -167,7 +250,11 @@ func _build_online() -> void:
 	bridge.rtt_source = func() -> float:
 		return float(maxi(0, link.ping_ms()))
 
-	link.chat_received.connect(_on_chat)
+	# [b]dot-server's own chat signal is deliberately NOT connected.[/b] The server
+	# cancels that path — see [method RoomModule._on_player_chat] — and routes every line
+	# through [DotChatRouter] onto this game's own wire instead. Connecting both would
+	# draw a line twice on a server running the old path and once on a server running the
+	# new one, which is the sort of difference that survives every test.
 	link.disconnected.connect(_on_disconnected)
 
 	ui.set_status("Joining the room…")
@@ -179,7 +266,39 @@ func _build_online() -> void:
 	bridge.ask_for_room()
 
 
+## The client's mirror of what is in the room.
+##
+## Not authoritative: [method RoomProps.setup] with `false` builds no [DotPropSpawner] at
+## all, because dot-props is explicit that a client holding one that could spawn would be
+## a modified client filling the world. What this holds is placements the server announced.
+func _make_props() -> RoomProps:
+	props = RoomProps.new()
+	props.name = "Props"
+	add_child(props)
+	props.setup(false, self)
+	return props
+
+
 func _connect_bridge() -> void:
+	bridge.chat_received.connect(func(wire: Dictionary) -> void:
+		chat.receive(wire)
+	)
+	bridge.avatar_received.connect(_on_avatar)
+
+	# The renderer reads the same object the simulation collides against, once, rather
+	# than being handed a copy on every placement. There is nothing to keep in step
+	# because there is only one list.
+	renderer.props = props
+	renderer.avatars = _avatars
+
+	if props != null:
+		# One line in the feed when something appears, because a bench materialising with
+		# no explanation reads as a glitch and a sentence does not.
+		props.placed.connect(func(_place_id: int, def: DotPropDef, _at: Vector2) -> void:
+			if _roster_ready:
+				ui.add_notice("A %s was put down." % def.name_or_id().to_lower())
+		)
+
 	bridge.hello_received.connect(func(occupant_id: int) -> void:
 		renderer.local_occupant_id = occupant_id
 		_roster_dirty = true
@@ -212,6 +331,7 @@ func _build_offline() -> void:
 	world = _offline.client_world
 	net = _offline.client_net
 	bridge = _offline.client_bridge
+	props = _offline.client_props
 	renderer.world = world
 
 	_connect_bridge()
@@ -290,8 +410,52 @@ func _process(_delta: float) -> void:
 
 
 func _unhandled_input(event: InputEvent) -> void:
+	# [b]Voice first, and it is the one thing that must be seen while typing.[/b] The
+	# talk key is not a movement key and the interface only takes the keyboard for text;
+	# a release swallowed because a text field had focus is a microphone left open, which
+	# is exactly the failure [method RoomVoice.release] exists for and is why the typing
+	# handler closes it as well.
+	if voice != null and voice.handle_event(event):
+		get_viewport().set_input_as_handled()
+		return
+
+	# A click with something selected in the palette puts it down instead of walking.
+	# Checked before the input sampler sees it, because on a touchscreen the same press is
+	# a drag: a player who selected a bench and then dragged across the room would
+	# otherwise walk there and place nothing.
+	if _place_click(event):
+		get_viewport().set_input_as_handled()
+		return
+
 	if input != null:
 		input.handle_event(event)
+
+
+## A click that is a placement rather than a step. False when it is not one.
+func _place_click(event: InputEvent) -> bool:
+	if ui == null or ui.held_prop() == &"":
+		return false
+
+	var at := Vector2.ZERO
+
+	if event is InputEventMouseButton:
+		var button := event as InputEventMouseButton
+
+		if button.button_index != MOUSE_BUTTON_LEFT or not button.pressed:
+			return false
+
+		at = button.position
+	elif event is InputEventScreenTouch:
+		var touch := event as InputEventScreenTouch
+
+		if not touch.pressed:
+			return false
+
+		at = touch.position
+	else:
+		return false
+
+	return ui.place_at(input.to_world(get_viewport(), _camera, at))
 
 
 ## Fits the whole room in the window.
@@ -319,27 +483,57 @@ func _frame_room() -> void:
 
 # --- Chat ------------------------------------------------------------------
 
+## Somebody pressed Enter.
+##
+## [b]One path, online and offline.[/b] Both send a `SAY` request over the bridge — the
+## offline one over a loopback — and both get the answer back as a routed `CHAT` event.
+## This function used to fork, and the offline half restated the shape of a chat payload
+## by hand, so the code a person running `--offline` exercised was the one path nothing
+## else used.
 func _on_chat_submitted(text: String) -> void:
-	if link != null:
-		link.send_chat(text)
-	elif _offline != null:
-		# Offline there is nothing to send it to and nothing to send it back, so it goes
-		# straight into the same handler a real line arrives at. The *shape* is
-		# dot-server's, which is what makes that possible.
-		_on_chat(_offline.say(text))
+	if bridge != null:
+		bridge.say(ui.active_channel(), text)
 
 
-## A chat line from dot-server. Already sanitised and already filtered.
-func _on_chat(payload: Dictionary) -> void:
-	ui.add_chat(payload)
+## A line [DotChatClient] accepted: in sequence, not a duplicate, on a known channel.
+func _on_chat_message(message: DotChatMessage, channel_id: StringName) -> void:
+	ui.add_message(message, channel_id)
 
 	# The bubble over somebody's head is drawn from the same message the log is, rather
 	# than from a second event. One path, so a bubble can never say something the log does
 	# not — which is what a second path eventually produces.
-	var occupant := world.occupant_for(int(payload.get("userid", 0)))
+	#
+	# [b]Only what a player said.[/b] A join notice or a server announcement has no
+	# speaker, and drawing one over somebody's head would put the server's words in their
+	# mouth. `sender_key` is what says which it is, and it is the pseudonymous key rather
+	# than a name for the reason dot-user exists.
+	if message.is_from_server() or message.sender_key == "":
+		return
+
+	# The occupant the server named, out of the one meta field this game's wire carries.
+	# Zero means the server could not resolve one — a line from somebody who has already
+	# left, which is a real sequence rather than an error — and there is simply no bubble.
+	var occupant := world.occupant_for(int(message.meta.get("o", 0)))
 
 	if occupant != null:
-		occupant.say(String(payload.get("text", "")), Time.get_ticks_msec())
+		occupant.say(message.text, Time.get_ticks_msec())
+
+
+# --- Props -----------------------------------------------------------------
+
+func _on_place_requested(prop_id: StringName, at: Vector2) -> void:
+	if bridge != null:
+		bridge.ask_to_place(prop_id, at)
+
+
+# --- Avatars ---------------------------------------------------------------
+
+## Somebody's avatar document arrived. Ids and colours; no scene, no mesh, no download.
+func _on_avatar(occupant_id: int, parts: Array) -> void:
+	# Written into the dictionary the renderer already holds, rather than reassigning it:
+	# a Dictionary is a reference in GDScript, so both ends are looking at one object and
+	# there is nothing to forget to hand over.
+	_avatars[occupant_id] = parts
 
 
 func _on_roster_changed(occupant_id: int, present: bool) -> void:

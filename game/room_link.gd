@@ -34,6 +34,15 @@ const NODE_NAME := &"Room"
 ## one delay anybody would notice.
 const CHANNEL_STATE := 1
 
+## Voice, and only voice.
+##
+## [constant DotTransport.Channel.EVENT] is what dot-server reserves for chat and events,
+## and this game's chat has moved onto [DotChatRouter] and rides `event` on the state
+## channel with everything else — so this one is free. Voice gets it to itself for the
+## reason the state channel exists at all: fifty packets a second must not sit behind a
+## snapshot, and a snapshot must not sit behind a talk spurt.
+const CHANNEL_VOICE := 2
+
 ## The bridge these calls are delivered to. Set by whoever creates this node.
 var bridge: RoomBridge = null
 
@@ -60,6 +69,8 @@ var inputs_sent: int = 0
 var inputs_received: int = 0
 var requests_sent: int = 0
 var requests_received: int = 0
+var voice_sent: int = 0
+var voice_received: int = 0
 
 
 static func attached_to(parent: Node, p_bridge: RoomBridge, server: bool) -> RoomLink:
@@ -123,6 +134,36 @@ func send_input(payload: PackedByteArray) -> void:
 		_net_client_input.rpc_id(1, payload)
 
 
+## One encoded [DotVoicePacket], in whichever direction this end is.
+##
+## [b]One call for both, because there is only one question and the answer differs by
+## transport rather than by code.[/b] A desktop client is on ENet, where `unreliable`
+## means a UDP datagram that is never retransmitted — which is what voice wants, since a
+## frame that arrives late is a frame the jitter buffer has already concealed. A browser
+## client is on a WebSocket, where every transfer mode is TCP underneath and this is
+## delivered reliably and in order whether or not it was asked for. That is a property of
+## the transport, not a gap here: the same bytes, the same [DotVoiceRouter], the same
+## jitter buffer, and a browser simply pays for retransmission it did not want. Writing
+## two paths would mean two paths to keep in step for a difference neither end can act on.
+##
+## [param peer_id] is the recipient on a server and is ignored on a client, which always
+## sends to the authority. **Zero is not "everybody"**: the router names its listeners one
+## at a time, for the reason [method RoomBridge._tell] gives.
+func send_voice(peer_id: int, payload: PackedByteArray) -> void:
+	if not _live():
+		return
+
+	voice_sent += 1
+
+	if loopback.is_valid():
+		loopback.call(&"voice", peer_id if is_server else 1, payload)
+	elif is_server:
+		if peer_id > 0:
+			_net_voice.rpc_id(peer_id, payload)
+	else:
+		_net_voice.rpc_id(1, payload)
+
+
 func send_request(payload: PackedByteArray) -> void:
 	if not _live():
 		return
@@ -183,6 +224,21 @@ func _net_request(payload: PackedByteArray) -> void:
 		bridge.receive_request(multiplayer.get_remote_sender_id(), payload)
 
 
+## A voice frame, either way.
+##
+## [b]`any_peer`, which on the server means the sender is a claim until the transport is
+## asked.[/b] [method MultiplayerAPI.get_remote_sender_id] is the fact, and
+## [method DotVoiceRouter.relay] stamps it over whatever the packet's own speaker field
+## said — because without that any client can put words in any other player's mouth and
+## the only symptom is confusion.
+@rpc("any_peer", "unreliable", "call_remote", CHANNEL_VOICE)
+func _net_voice(payload: PackedByteArray) -> void:
+	voice_received += 1
+
+	if bridge != null:
+		bridge.receive_voice(multiplayer.get_remote_sender_id(), payload)
+
+
 ## Hands a payload to this end as though it had arrived over the wire.
 ##
 ## What the other end's [member loopback] calls. It goes through the same counters and the
@@ -205,6 +261,9 @@ func deliver(method: StringName, from_peer_id: int, payload: PackedByteArray) ->
 		&"request":
 			requests_received += 1
 			bridge.receive_request(from_peer_id, payload)
+		&"voice":
+			voice_received += 1
+			bridge.receive_voice(from_peer_id, payload)
 
 
 func describe() -> Dictionary:
@@ -214,4 +273,5 @@ func describe() -> Dictionary:
 		"events": [events_sent, events_received],
 		"inputs": [inputs_sent, inputs_received],
 		"requests": [requests_sent, requests_received],
+		"voice": [voice_sent, voice_received],
 	}

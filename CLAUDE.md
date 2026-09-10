@@ -22,21 +22,181 @@ rounds, no combat, no items. What is left is admission, membership, replication,
 prediction and chat, and every one of those is something every other game also has to get
 right.
 
-## Chat is dot-server's, and nothing here re-implements it
+## Chat is dot-chat's, and there is still exactly one path
 
-`DotChatManager` routes, sanitises, flood-limits and permission-filters every message, and
-every client already receives one through `DotClientLink.chat_received`. This game adds no
-chat message to its own wire format.
+It used to be dot-server's, whole: `DotChatManager` routed, sanitised, flood-limited and
+permission-filtered every message and every client received one through
+`DotClientLink.chat_received`. What changed is that **`DotChatRouter` took over the
+rules**, because a lobby wants what that one does not have — channels with an audience, a
+radius so somebody across the room is not in your conversation, a backlog for whoever just
+walked in, a `/me`, and a gag that survives a reconnect.
 
-That is a deliberate refusal, not an omission. A second path would be a second set of rules
-to keep in step, and the one that skipped the filter would be the one that leaked admin
-chat to everybody — or that let a zero-width character through and rendered a name
-backwards. `examples/sandbox.tscn` checks the sanitising from this side for that reason:
-not because dot-server's own suite does not, but because the thing worth checking is that
-this game did not route around it.
+**The important half is that there is still one path.** `RoomModule` hooks `player_chat`
+with `hook_pre` and **cancels** it, so dot-server's own broadcast never happens; the line
+goes to the router instead, and the router's `send_fn` comes out on this game's wire as
+`RoomEvents.Kind.CHAT`. dot-server's join and leave announcements are turned off in the
+same place, because dot-chat now makes them. Two paths would be two sets of rules to keep
+in step, and the one that skipped the filter would be the one that leaked admin chat to
+everybody — or that let a zero-width character through and rendered a name backwards.
+`examples/sandbox.tscn` asserts that **nothing at all** arrives through dot-server's own
+chat signal, which is the check that says the cancel works.
 
-The bubble over somebody's head is drawn from the same payload the log is. One path, so a
+**The legacy path still works and is still the router's.** A browser shell's own chat box
+and a client console's `say` both go through dot-server and have no way to name a channel;
+the module forwards them onto the room channel rather than dropping them, and the sandbox
+checks a line sent the old way comes back on the new wire.
+
+The bubble over somebody's head is drawn from the same message the log is. One path, so a
 bubble can never say something the log does not.
+
+### The chat key is not the punishment subject, and the difference is measurable
+
+dot-chat asks "who said this" through `key_fn`; dot-moderation asks "who is this" through
+`key_for_peer`. They are separate seams and this game answers them differently:
+
+- **A punishment is against a person who will come back**, so its subject is the durable
+  account uid. A gag keyed by anything shorter-lived lasts until the gagged player presses
+  reconnect, which is the first thing anybody who has been gagged tries — and is exactly
+  the bug dot-moderation exists to fix in dot-server's two-booleans-on-a-session.
+- **A chat line is attributed to somebody standing in this room right now**, so its key is
+  the occupant.
+
+Keying both by the uid looks obviously right and is wrong: **two guests connecting from
+one machine share a device id and therefore share a uid**, so the second person's words
+appear over the first person's head. `sandbox` runs two clients in one process and found
+it — every count matched throughout.
+
+## Voice
+
+`DotVoiceManager` on each client, `DotVoiceRouter` on the server, and three decisions here.
+
+**One RPC for both transports.** `RoomLink.send_voice` is `@rpc(..., "unreliable", ...)` on
+its own channel. On ENet that is a UDP datagram that is never retransmitted, which is what
+voice wants — a frame that arrives late is one the jitter buffer has already concealed. On
+a WebSocket every transfer mode is TCP underneath and it is delivered reliably whether or
+not that was asked for. That is a property of the transport rather than a gap here, and
+writing two paths would be two paths to keep in step for a difference neither end can act
+on.
+
+**Push to talk, and the microphone closes with the keyboard.** A lobby is somewhere people
+leave a tab open, and voice activation on an open tab is a room full of somebody's
+television. `RoomVoice.release()` is called from the typing handler as well as from the key
+release, because a key-up delivered into a text field is a gate that never closes — the one
+voice bug people report as "everyone could hear me" rather than as a bug.
+
+**Playback goes into a buffer when there is no audio device**, which is what makes the
+receiving half checkable at all. `DotVoiceSinkPlayer` needs a mixer; a headless run has
+none, and without a buffer sink a wire that decoded to nothing would look exactly like one
+that worked. `sandbox` asserts an **amplitude**, not a frame count.
+
+### The bug voice found in dot-voice
+
+**The speaker id was 16 bits and a Godot peer id is 31.** A listener got a number matching
+nobody, and — the half that is not merely useless — two players whose ids differ only above
+bit 16 became one speaker: one jitter buffer, interleaved sequence numbers, one stateful
+ADPCM decoder, and both of them noise. About a 3% chance per 64-player server. dot-voice's
+own suite drives the router with speaker numbers like 2 and 7, all of which fit; this is
+the first thing in the family to relay a frame between two real clients over real sockets
+and then ask a listener **who** was talking. Fixed there, as wire version 2.
+
+## Props: the room is furnished by the people in it
+
+`dot-props` is here for its **book-keeping**, which is the dimension-free half: a
+catalogue, a per-player budget, a spawn interval, a world cap, an undo stack, ownership,
+and a cleanup when somebody leaves. `DotPropSpawner.spawn_2d` was added to dot-props for
+this deployment — the coupling to 3D was twelve lines and none of it was about any of the
+above.
+
+**Everything is frozen the moment it lands**, and that is the whole reason a lobby can have
+props at all. Rigid-body simulation is not reproducible across machines — dot-props says so
+and every game here that networks props repeats it — so a prop that fell over would be
+somewhere different on every client with nothing erroring. A frozen body is a static
+obstacle, and both ends derive its collision from the same replicated position and the same
+catalogue radius.
+
+**Collision is a circle, always.** Same argument as the furniture: one normalise and one
+multiply, exact, no corner case — and because both ends use the same circle they cannot
+disagree, which is the property that actually matters.
+
+**Three of the four things about a prop never travel.** What goes on the wire is a place
+id, an **index** into the catalogue, a quantised position and a rotation; the radius, the
+colour and whether anybody collides with it are derived from the same file both ends read.
+The index is taken from a list sorted as `String` rather than as `StringName`, because
+`Array.sort()` on a StringName compares interned pointers — dot-net shipped exactly that
+bug with message ids and only a browser client could see it.
+
+**The place id is adopted, never allocated.** A receiving peer that numbered things itself
+gives the same bench two names on two machines and every count still matches, which is the
+bug dot-2d had to gain `Dot2DScatter.adopt` to fix.
+
+### What a picture found
+
+The prop drawing was written, the suites passed, and the screenshot had **no props in it
+at all**: `DotNodeRef.of_path(world.get_path())` needs the world to be in a tree, and
+`tools/screenshot.gd` builds one from `SceneTree._initialize` where it is not. The spawner
+refused every placement. The bodies are parented to `RoomProps` now, which is also the
+right answer for a different reason — a prop outlives a `changegame` and the world does
+not.
+
+And once they drew: **a rug read as an obstacle.** A third-opacity fill with a solid rim at
+a fixed size is exactly what the furniture looks like, so the two things a player may walk
+over looked like the six they may not. There is no assertion that could have said so — the
+radius was zero, the obstacle list was right, and both ends agreed. They are drawn now with
+no shadow, no rim, a fainter fill and a dotted edge, at a size the catalogue gives.
+
+## Identity: profiles, avatars and a platform
+
+`RoomPlatform` builds dot-user, dot-user-avatar and `DotPlatformHub` with this lobby's
+settings, and `examples/dedicated.tscn` loads `DotPlatformModule` beside `RoomModule`.
+
+**It is optional and the lobby must work without it.** A LAN room somebody runs for an
+evening has no accounts, and that is the most common deployment there is — so `RoomModule`
+duck-types against the platform module rather than naming it. game-hungario's module takes
+the same shape for the same reason.
+
+**Guests get profiles.** `allow_guest_profiles` is on, which is not dot-user's default,
+because the whole point of a lobby is that you can walk into one.
+
+**An avatar arrives after the person does**, so it is its own event rather than a field of
+the join: dot-platform resolves a profile and an avatar asynchronously and a lobby must not
+hold somebody at the door while a cosmetic loads. A player you cannot see is worse than a
+player with no hat.
+
+**Ids and colours travel; no mesh, no scene, no download.** That is dot-user-avatar's whole
+claim and this is the client end of it — the renderer draws a hat as an arc and a face as
+two dots, and a slot it has never heard of as a mark beside the head, so somebody wearing
+something from a newer catalogue is visibly wearing *something*. `hat_crown` is not free,
+because entitlements default to nothing and a server that granted everything would work
+perfectly in every test and quietly be a game where every unlock is free.
+
+## The server browser, and what is still missing
+
+`RoomBrowser` puts `DotBrowser` behind a table: DQP over UDP, DQP over a WebSocket in a
+browser, A2S for everything else, with favourites, history and a local filter.
+
+**Filtering is local and always will be.** A server that decided which of its own
+properties to report is a server that reports whatever gets it listed.
+
+**There is no master server, and this file is where that is visible.** A tracker has to be
+told an address and nothing announces one, so the sources are the two that need no such
+thing: where this person has been, and whatever they type.
+`DotBrowserSourceBackbone` reads a listing website-city does not yet publish; adding it is
+one line the day it does.
+
+## Delivered, not shipped — and the one thing that stops it
+
+`tools/publish_room.tscn` packages `game/` and `scenes/` into a signed dot-cloud pack:
+25 files, a `manifest.json` and a content-addressed `objects/` tree that drops behind any
+web server. `RoomModule.game_descriptor(manifest_url)` then produces the relative-path
+shape a generic shell mounts and instantiates.
+
+**And the pack does not work yet, which the tool says out loud rather than hiding.**
+A mounted pack's `class_name` globals are not registered in the host — measured, and in the
+family's own CLAUDE.md — so every cross-file type reference inside it fails to compile:
+the pack mounts, the scenes load, and every script in it is dead. `preload` and
+`extends "res://..."` by path both work. Converting this game to paths is what makes it
+deliverable; the pack is produced anyway so the publishing half can be checked before that
+work, and the warning is printed on every run so nobody discovers it from a black screen.
 
 ## The room has furniture, and it is in `RoomContent` for the same reason its size is
 
@@ -207,8 +367,8 @@ tools/check.sh                # all four, after a parse pass
 | --- | --- | --- |
 | `headless_room` | 31 | the room alone. Membership, walls, and two worlds replaying the same commands bit-identically |
 | `headless_net` | 65 | every encoder against its decoder, then a session over a lossy delaying loopback, then a walk into the furniture |
-| `dedicated` | 40 | a real `DotServer`, a real module, a real WebSocket listener |
-| `sandbox` | 41 | **a real server and two real clients, over real sockets, in one process** |
+| `dedicated` | 81 | a real `DotServer`, a real module, a real WebSocket listener, and the props, chat, voice, moderation and identity halves |
+| `sandbox` | 61 | **a real server and two real clients, over real sockets, in one process** — chat, props and voice all cross a wire here and nowhere else |
 
 **`sandbox` is the one that matters and the slowest to write.** It is the only place
 dot-server's signon, the RPC node paths, dot-server's chat and this game's netcode run at
@@ -238,6 +398,16 @@ the total at the bottom cannot reveal a check that never ran.
 | Where the round trip is measured | `RoomBridge.rtt_source` |
 | Whether the world sets itself up | `RoomWorld.auto_setup` |
 | Which link a client uses | `RoomClient.link`, assigned before it enters the tree |
+| What can be put in the room, and how much of it | `RoomProps.catalogue()`, `PER_PLAYER`, `WORLD_BUDGET`, `PLACE_INTERVAL` |
+| Where a chat line may be said and who hears it | `RoomServices.chat_channels()` — four channels, one of them a radius |
+| What a chat line may contain | `RoomServices.chat_rules()` |
+| Where punishments live | `RoomServices.punishments_path`, or a `DotPunishmentStore` subclass |
+| Who counts as an admin, and what a speaker's key is | `RoomServices._is_admin` / `_key_of` / `_subject_for_peer` |
+| The voice format both ends must agree on | `RoomServices.voice_config()` |
+| Whether voice is proximity or the whole room | `RoomServices._build_voice`, one line |
+| What somebody may wear | `RoomContent.avatar_schema()` |
+| Where profiles and avatars are stored, and the pseudonym scope | `RoomPlatform` |
+| Which servers the launcher knows about | `RoomBrowser._start`, a `DotBrowserSource` each |
 
 ## Looking at it
 
@@ -269,9 +439,14 @@ method rather than like a node that has not started yet.
   nobody is arguing about. Off, explicitly, in `RoomContent.net_config()`.
 - **Persistence.** Nobody's position outlives their session, and a name that did would be a
   profile — which is dot-user's.
-- **Avatars.** `dot-user-avatar` would draw a rider on top of a circle exactly the way
-  dot-2d-hungry does, and it is the one piece of this that has already been proven
-  elsewhere.
+- **A wardrobe screen.** The schema, the entitlement check and the drawing are all here
+  and a player cannot yet *choose*: `DotAvatarSchema.choices_for` is the call and a
+  `DotScreen` over it is the missing half. Deliberate, because the thing worth proving was
+  that a server decides what is legal without loading anything, and a screen does not
+  change that.
+- **A `class_name`-free build.** The pack publishes and would mount dead; see the section
+  above. It is a mechanical change to every file in `game/` and it is the last thing
+  between this and being genuinely delivered rather than shipped.
 - **A Host button.** A browser tab cannot listen, and offering a control that fails on the
   platform this game exists for is worse than not offering it.
 - **Audio.** dot-2d-hungry generates its whole bank arithmetically; there is nothing here

@@ -73,6 +73,17 @@ var motor: Dot2DMotor = null
 ## session id -> [RoomOccupant].
 var occupants: Dictionary = {}
 
+## What people have put in the room, or null on a world that has none.
+##
+## [b]Assigned rather than created here, and null is a legitimate value.[/b] The world is
+## the thing a client replays and the props are the thing an operator can turn off; a
+## world that built its own would make `sv_room_props 0` a world with a different
+## simulation rather than a room with nothing in it. [RoomModule] creates it on the
+## authority and [RoomClient] on a client, and both hand it here — which is also what
+## makes `examples/headless_room.tscn` able to run the movement with no prop layer at all
+## and get the same answer.
+var props: RoomProps = null
+
 var _tick: int = 0
 var _registered_name: StringName = &""
 var _ready_called: bool = false
@@ -307,6 +318,18 @@ func simulate_occupant(
 	occupant.state.position = RoomContent.resolve_furniture(
 		occupant.state.position, occupant.state.radius, normals
 	)
+
+	# And then whatever people have put in the room, which is the same problem with a
+	# list that changes. [b]Both ends resolve it and both ends resolve it here[/b], inside
+	# the one function a client replays — a prop the server collides against and the
+	# client does not is a player corrected out of a space that looks empty, which is the
+	# furniture's own argument with a list that somebody edits while you are standing in
+	# it. The list is cached by [RoomProps] rather than rebuilt, because this runs on
+	# every occupant on every tick on both ends and again on every replayed tick.
+	if props != null:
+		occupant.state.position = RoomContent.resolve_circles(
+			occupant.state.position, occupant.state.radius, props.obstacles(), normals
+		)
 
 	# The velocity going INTO whatever pushed them, removed.
 	#

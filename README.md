@@ -12,12 +12,9 @@ This project, along with every asset it is built on, was built initially with **
 I intend on reviewing code, testing, and editing documentation regularly. If you're interested in helping out, please let me know!
 
 ## The Staging Area
-A lobby. You walk about in a small 2D room, you can see who else is in it, and you can
-talk to them.
+A lobby. You walk about in a small 2D room, you can see who else is in it, and you can talk to them.
 
-Part of the [dot-*](https://github.com/modcommunity) family. It is the game a
-[dot-server](https://github.com/modcommunity/dot-server) runs when it is not running anything else — the staging area
-a player lands in, and the place they wait while an operator changes the game under them.
+Part of the [dot-*](https://github.com/modcommunity) family. It is the game a [dot-server](https://github.com/modcommunity/dot-server) runs when it is not running anything else — the staging area a player lands in, and the place they wait while an operator changes the game under them.
 
 ```bash
 godot --path .                                   # the launcher
@@ -33,19 +30,11 @@ Mouse or WASD walks. Enter talks, Escape stops talking.
 
 Three things, and the third is the reason it exists at all.
 
-**A place to be that is not a game.** A server with no game loaded is a legitimate thing
-to run and dot-server has always supported it; what it did not have was anything to look
-at. A player who connects and sees nothing cannot tell that from a broken server.
+**A place to be that is not a game.** A server with no game loaded is a legitimate thing to run and dot-server has always supported it; what it did not have was anything to look at. A player who connects and sees nothing cannot tell that from a broken server.
 
-**The thing a generic client shell downloads first.** This is the game shipped as a
-dot-cloud pack in [dot-server-setup-test](https://github.com/modcommunity/dot-server-setup-test): a browser client
-connects, is sent here, mounts it, and is standing in a room without knowing what a room
-is. `changelevel` then moves them somewhere else and back.
+**The thing a generic client shell downloads first.** This is the game shipped as a dot-cloud pack in [dot-server-setup-test](https://github.com/modcommunity/dot-server-setup-test): a browser client connects, is sent here, mounts it, and is standing in a room without knowing what a room is. `changelevel` then moves them somewhere else and back.
 
-**A small enough game that the platform is what is being tested.** There is no scoring,
-no combat, no rounds and no content beyond a rectangle: what is left is admission,
-membership, replication, prediction and chat, which is exactly the set of things every
-other game also has to get right.
+**A small enough game that the platform is what is being tested.** There is no scoring, no combat, no rounds and no content beyond a rectangle: what is left is admission, membership, replication, prediction and chat, which is exactly the set of things every other game also has to get right.
 
 ## What is in it
 
@@ -57,8 +46,7 @@ other game also has to get right.
 | **The roster** | Everybody in the room, oldest first, with how long they have been here. |
 | **Join and leave** | Announced in the log and in a fading feed. |
 
-No art, no audio, no fonts: everything is a rectangle, a circle or a string, the same way
-[dot-ui](https://github.com/modcommunity/dot-ui) ships no art and [dot-2d](https://github.com/modcommunity/dot-2d) draws nothing.
+No art, no audio, no fonts: everything is a rectangle, a circle or a string, the same way [dot-ui](https://github.com/modcommunity/dot-ui) ships no art and [dot-2d](https://github.com/modcommunity/dot-2d) draws nothing.
 
 ## Validating
 

@@ -156,10 +156,19 @@ func _module_load() -> DotResult:
 	if server.chat != null:
 		server.chat.announce_joins = false
 
+	# **`.with_chat()` is what lets a player or an admin type these.**
+	# `DotConCommand.chat_allowed` defaults to false and dot-server's chat manager —
+	# which is what actually handles a `!command` — dispatches with `Source.CHAT`, so an
+	# unmarked command answers "cannot be run from chat" however many flags you hold.
+	#
+	# Marked here are the player-facing ones and the moderation ones dot-server marks on
+	# its own equivalents. The cheats and the ones that change the world stay
+	# console-only, for the reason game-g2gfast's suite asserts about its map command:
+	# a thing that ends everybody's round is not a thing you type mid-round.
 	add_command(
 		"room_status", _cmd_status, "Show the room", DotAdminFlags.GENERIC
-	)
-	add_command("room_who", _cmd_who, "List who is in the room", "")
+	).with_chat()
+	add_command("room_who", _cmd_who, "List who is in the room", "").with_chat()
 	add_command(
 		"room_net", _cmd_net, "Show the netcode's counters", DotAdminFlags.GENERIC
 	)
@@ -170,7 +179,7 @@ func _module_load() -> DotResult:
 	add_command(
 		"room_services", _cmd_services,
 		"Show chat, voice and moderation", DotAdminFlags.GENERIC
-	)
+	).with_chat()
 	# [b]The punishment commands are MUTE-flagged and the prop clear is GENERIC.[/b]
 	# Emptying the room is tidying up; gagging somebody is a record with their name on it
 	# that outlives the session, and dot-server's own flags are what distinguish them —
@@ -180,15 +189,15 @@ func _module_load() -> DotResult:
 	add_command(
 		"room_gag", _cmd_gag,
 		"Stop somebody typing: room_gag <who> <seconds> [reason]", DotAdminFlags.MUTE
-	)
+	).with_chat()
 	add_command(
 		"room_mute", _cmd_mute,
 		"Stop somebody talking: room_mute <who> <seconds> [reason]", DotAdminFlags.MUTE
-	)
+	).with_chat()
 	add_command(
 		"room_unpunish", _cmd_unpunish,
 		"Lift everything against somebody: room_unpunish <who>", DotAdminFlags.MUTE
-	)
+	).with_chat()
 	add_command(
 		"room_say", _cmd_say,
 		"Say something to the room as the server: room_say <text>", DotAdminFlags.CHAT

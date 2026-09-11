@@ -50,7 +50,7 @@ const PLACE_INTERVAL := 0.35
 ## The scene every prop is, and the only one this game ships.
 ##
 ## [b]`room_`-prefixed, and that is a deployment constraint rather than a style.[/b]
-## dot-server-setup-test flattens every built-in game into one `game/` directory — a
+## dot-server-deploy flattens every built-in game into one `game/` directory — a
 ## `.tscn` names its scripts by absolute `res://` path and there is no relative form — so
 ## two games with a `game/prop.tscn` between them means one silently overwrites the other.
 ## This was called `prop.tscn` and collided with game-playground's on the first vendored

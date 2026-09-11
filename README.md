@@ -32,7 +32,7 @@ Three things, and the third is the reason it exists at all.
 
 **A place to be that is not a game.** A server with no game loaded is a legitimate thing to run and dot-server has always supported it; what it did not have was anything to look at. A player who connects and sees nothing cannot tell that from a broken server.
 
-**The thing a generic client shell downloads first.** This is the game shipped as a dot-cloud pack in [dot-server-setup-test](https://github.com/modcommunity/dot-server-setup-test): a browser client connects, is sent here, mounts it, and is standing in a room without knowing what a room is. `changelevel` then moves them somewhere else and back.
+**The thing a generic client shell downloads first.** This is the game shipped as a dot-cloud pack in [dot-server-deploy](https://github.com/modcommunity/dot-server-deploy): a browser client connects, is sent here, mounts it, and is standing in a room without knowing what a room is. `changelevel` then moves them somewhere else and back.
 
 **A small enough game that the platform is what is being tested.** There is no scoring, no combat, no rounds and no content beyond a rectangle: what is left is admission, membership, replication, prediction and chat, which is exactly the set of things every other game also has to get right.
 

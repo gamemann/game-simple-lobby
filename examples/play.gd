@@ -37,7 +37,7 @@ var _browser: RoomBrowser = null
 ##
 ## [b]Signed in without a code on screen, or not at all.[/b] `sign_in()` tries the page
 ## handoff, then a stored session, and then falls through to a device-code login — two
-## backbone requests for a flow with no code shown and nobody to read it. dot-server-setup-test
+## backbone requests for a flow with no code shown and nobody to read it. dot-server-deploy
 ## shipped exactly that and it is what made a wrong default domain visible. So this asks
 ## for the quiet halves only, and a person who has never signed in stays a guest, which is
 ## what a lobby is for.
@@ -124,7 +124,7 @@ func _sign_in() -> void:
 	# [b]The page handoff and a stored session, and deliberately NOT `sign_in()`.[/b]
 	# That one falls through to `start_device_login()` when neither works — two backbone
 	# requests on every launch for a flow with no code on screen and nobody to read it.
-	# dot-server-setup-test shipped exactly that, and those two requests are what made a
+	# dot-server-deploy shipped exactly that, and those two requests are what made a
 	# wrong default backbone domain visible in a network tab.
 	if _auth.web_handoff and DotAuthWebHandoff.supported():
 		var handed: DotResult = await _auth.try_web_handoff()

@@ -15,7 +15,7 @@ sees a blank screen cannot distinguish it from a broken server.
 and dot-2d-hungry all ship inside their own build, so `changelevel` has never sent a client
 to fetch a map and dot-server's content sync has never run end to end. This one is small
 enough to be a pack — no art, no audio, no fonts — and it is what
-[dot-server-setup-test](../dot-server-setup-test)'s client shell mounts.
+[dot-server-deploy](../dot-server-deploy)'s client shell mounts.
 
 **It is the smallest thing that still exercises the whole platform.** No scoring, no
 rounds, no combat, no items. What is left is admission, membership, replication,
@@ -339,7 +339,7 @@ own tolerance, chosen for the same reason. **Any dot-2d game on dot-net has this
 **In dot-net — `Array.sort()` on a `StringName` does not sort lexicographically.**
 Godot compares StringNames by their interned pointer, so `DotNetMessageRegistry.seal()`
 gave the same message type different wire ids on two peers and hashed two different
-schemas. Found from `dot-server-setup-test`'s browser client, which is the first peer in
+schemas. Found from `dot-server-deploy`'s browser client, which is the first peer in
 this family that is a separate program; every suite here runs both ends in one process and
 shares one intern table. `headless_net` now asserts the order is lexicographic, which
 catches it without two processes.
@@ -365,7 +365,8 @@ tools/check.sh                # all four, after a parse pass
 
 | | | |
 | --- | --- | --- |
-| `headless_room` | 31 | the room alone. Membership, walls, and two worlds replaying the same commands bit-identically |
+| `headless_room` | 41 | the room alone. Membership, walls, and two worlds replaying the same commands bit-identically |
+| `headless_presentation` | 45 | settings, audio, effects, the console and the party — **none of which `headless_room` can reach**, because that one is `RoomWorld` alone and has no client in it |
 | `headless_net` | 65 | every encoder against its decoder, then a session over a lossy delaying loopback, then a walk into the furniture |
 | `dedicated` | 81 | a real `DotServer`, a real module, a real WebSocket listener, and the props, chat, voice, moderation and identity halves |
 | `sandbox` | 61 | **a real server and two real clients, over real sockets, in one process** — chat, props and voice all cross a wire here and nowhere else |
@@ -399,6 +400,11 @@ the total at the bottom cannot reveal a check that never ran.
 | Whether the world sets itself up | `RoomWorld.auto_setup` |
 | Which link a client uses | `RoomClient.link`, assigned before it enters the tree |
 | What can be put in the room, and how much of it | `RoomProps.catalogue()`, `PER_PLAYER`, `WORLD_BUDGET`, `PLACE_INTERVAL` |
+| What a player may change, and who owns each setting | `RoomPresentation.schema()` — one list, read by the console, the store and a screen |
+| What the lobby makes a noise about | `RoomPresentation.sound_catalogue()` |
+| What it draws | `RoomPresentation.fx_catalogue()` |
+| What the client's own console can do | `RoomPresentation._local_commands()` |
+| Where friends meet when there is no server | `RoomParty.signalling_url` |
 | Where a chat line may be said and who hears it | `RoomServices.chat_channels()` — four channels, one of them a radius |
 | What a chat line may contain | `RoomServices.chat_rules()` |
 | Where punishments live | `RoomServices.punishments_path`, or a `DotPunishmentStore` subclass |
@@ -413,7 +419,10 @@ the total at the bottom cannot reveal a check that never ran.
 
 ```bash
 tools/screenshot.sh          # -> screenshots/room.png, gitignored
+tools/screenshot_menus.sh    # -> screenshots/menu_*.png, the pause and settings screens
 ```
+
+`screenshot_menus.sh` is separate because a room wants a camera framing a world and a menu wants a viewport-sized stack with nothing behind it. It found the seventh bug of the pass that added it: **`DotSettingsConfig` emitted no `PROPERTY_USAGE_GROUP` entries**, so this game's eight settings all appeared under one heading called "Resource" — the base class name — instead of Audio, Chat and Accessibility. `DotSettingsDef.category` had carried those words since the class was written and reached nothing; the panel drew perfectly and the heading was a plausible word.
 
 Needs `xvfb-run`: `--headless` gives a null renderer and saves empty frames, which is
 worse than no screenshot because it looks like one. Copied from `game-arena`'s rather than
@@ -431,6 +440,81 @@ there is nothing to get the direction of.
 its `_ready` on the first frame, so `world.arena` is still null and `add_occupant` fails
 with "Nonexistent function 'spawn_position' in base 'Nil'" — which reads like a missing
 method rather than like a node that has not started yet.
+
+## The presentation layer: four addons that belong to the person, not the room
+
+`RoomPresentation` holds dot-settings, dot-audio, dot-fx and dot-console, on the client
+only. They are together for the same reason `RoomServices` exists: **the joins between
+them are the whole point.** The settings document is where the volume lives, the mixer is
+what reads it, the console is what changes it from a keyboard, and none of the three
+addons knows the other two exist.
+
+**None of it runs on the dedicated server.** A settings document belongs to a person, a
+sound belongs to a machine with a sound card, an effect belongs to one with a renderer,
+and a console belongs to somebody with a keyboard. The server has dot-server's own
+console, which this one *bridges to* by duck typing when the two are in one process — so
+this file names no dot-server type and a client with no server still works.
+
+**Every declared setting is a console variable, by reflection over the schema.** A setting
+added to `RoomPresentation.schema()` appears in the console, in a generated settings screen
+and in the saved document at once, with nobody editing three files. That is this tree's
+most repeated bug — two copies of one list — not happening, and it is why the schema is a
+static function rather than a resource somebody fills in twice.
+
+Three decisions in it are this lobby's rather than the addons':
+
+- **The chat notification has a cooldown and the whisper does not share it.** A room of
+  twenty people typing is twenty notification sounds a second, which is not a busy room,
+  it is a fire alarm. A whisper and a line with your name in it are louder and higher
+  priority, because both are addressed to you.
+- **`near_range` is the only setting a server may clamp.** A room that wants everybody to
+  hear everybody caps how far a voice carries; a server that could read the volume, the
+  audio device or the key bindings would be assembling a fingerprint that survives a new
+  account.
+- **`show_timestamps` and `chat_lines` are ACCOUNT-scoped.** A lobby is where somebody
+  configures themselves before going somewhere else, so the settings that are about *them*
+  follow them into every game in this family that opts into `tmc_account`.
+
+And the line every game with a console forgets: `_unhandled_input` returns early while
+`presentation.swallows_input()`. This game turns letters into shortcuts, so without it
+typing `settings` into the console cycles the chat channel four times and opens the chat
+box.
+
+## Escape opens a menu, which it did not
+
+This client had a console and no menu at all. Escape put the prop palette down and did nothing else, so the only route to a setting was knowing that a console existed and what to type into it — which is not a route a player has.
+
+`RoomMenus` registers a pause screen and dot-ui's `DotSettingsScreen`, and Escape is a **ladder**: stop typing, then put the palette down, then open the menu. One key still means "stop what you are doing", and the menu is what is left when there is nothing else to stop.
+
+**The stack does not own the mouse.** `DotScreenStack.manage_mouse` forces CAPTURED whenever nothing is open, which is right for a first-person game and wrong for this one: the lobby is played with a visible cursor — a click places a prop — so a stack that recaptured on every close would take away the only control scheme this game has.
+
+**The settings screen is dot-ui's, not this game's own.** Four clients in the family had written the same panel-title-buttons shape, and two copies of one thing is this tree's most repeated mistake. What is this game's own is which document it hands over, and that is one line.
+
+**And the check that matters is not that it draws.** `DotSettingsManager.to_config()` hands out a *snapshot*, so a screen that called only the panel's apply would report success and change nothing. Every structural check passes either way — it builds, it has a size, it has focus. `headless_presentation` edits a value, presses Apply, and then reads the **manager** and the mixer.
+
+**`leave_requested` is announced rather than acted on.** What "leave" means belongs to whatever loaded this client — a shell goes back to its own menu, an embedded page closes the frame. A client that called `get_tree().quit()` itself would be one that cannot be embedded in anything.
+
+## Hosting for friends, and why this is the game for it
+
+`RoomParty` is dot-peer-to-peer, and of the five games in this family the lobby is the one
+it actually suits:
+
+- **There is nothing to cheat at.** No score, no records, no entitlements, no reward. A
+  host who can lie about the simulation can lie about where a bench is.
+- **It is small.** Eight people in one room is inside what a domestic uplink carries.
+- **It is the case a dedicated server is too much for.** "Come and sit in a room with me"
+  should not need somebody to rent a box.
+
+So the trust model is `HOST_AUTHORITATIVE` and that is a considered answer rather than a
+default — `game-g2gfast` takes the same addon and refuses it, because its entire output is
+records and a host who can cheat and a leaderboard are one exploit rather than two
+features.
+
+**It does not replace the netcode.** dot-net still carries the simulation and `RoomBridge`
+still speaks it; the party produces a `MultiplayerPeer` and a membership list, which is
+the part dot-server would otherwise have provided. And **a browser tab still cannot
+listen** — the "Things deliberately not here" entry about a Host button stands for the
+dedicated path; WebRTC is the one way round it, and it is the reason this addon exists.
 
 ## Watching somebody else
 
@@ -473,5 +557,8 @@ reports the departure *before* removing the occupant picks the occupant who just
   between this and being genuinely delivered rather than shipped.
 - **A Host button.** A browser tab cannot listen, and offering a control that fails on the
   platform this game exists for is worse than not offering it.
-- **Audio.** dot-2d-hungry generates its whole bank arithmetically; there is nothing here
-  worth hearing.
+- **Any actual audio.** dot-audio is wired and the catalogue is written; there are no
+  files behind it. That is the right way round — what this game was missing was never the
+  files but the decision about what is audible, how many at once and how loud, which is a
+  document and is now `RoomPresentation.sound_catalogue()`. Dropping five `.ogg` files
+  into `audio/` changes nothing else.

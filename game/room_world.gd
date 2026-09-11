@@ -87,6 +87,13 @@ var props: RoomProps = null
 ## Watching somebody else in the room, which is what you do while you wait.
 var spectate: RoomSpectate = null
 
+## Who is in the room, which side they picked, which class, and where they stand.
+##
+## [b]A lobby is where those records are decided and a match is where they are used.[/b]
+## Picking a side here and having it mean something in the game you go on to is the
+## whole reason a side outlives a match. See [RoomPlayerStack].
+var player_stack: RoomPlayerStack = null
+
 var _tick: int = 0
 var _registered_name: StringName = &""
 var _ready_called: bool = false
@@ -157,6 +164,8 @@ func setup() -> DotResult:
 		)
 		DotRegistry.register(_registered_name, self)
 
+	_build_player_stack()
+
 	DotLog.info(CHANNEL, "room ready", {
 		"authority": is_authority,
 		"bounds": arena.bounds,
@@ -164,6 +173,26 @@ func setup() -> DotResult:
 	})
 
 	return DotResult.success(self)
+
+
+## Stands up the player-facing addons and binds them to this room.
+##
+## Last, because it reads the arena's bounds to lay out its seats, and a stack built
+## before the arena binds to nothing and reports success.
+func _build_player_stack() -> void:
+	player_stack = RoomPlayerStack.new()
+	player_stack.name = "PlayerStack"
+	player_stack.apply_physics = is_authority
+	player_stack.register_service = register_service
+	add_child(player_stack)
+
+	var res := player_stack.setup(self)
+
+	if not res.ok:
+		DotLog.warn(CHANNEL, "the player stack is off", {"why": res.error.message})
+		remove_child(player_stack)
+		player_stack.queue_free()
+		player_stack = null
 
 
 func current_tick() -> int:
@@ -299,6 +328,12 @@ func tick(commands: Dictionary) -> void:
 	# not where the last one did.
 	if spectate != null:
 		spectate.tick(delta)
+
+	# Expires the reconnect windows of people who have dropped out. Without it the
+	# window is only checked when somebody tries to rejoin, which means it never
+	# expires and the roster grows for the whole uptime of the lobby.
+	if player_stack != null:
+		player_stack.tick(_tick)
 
 
 ## One person, one tick. The whole of the movement, and the only thing a client predicts.

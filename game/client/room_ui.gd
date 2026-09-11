@@ -29,6 +29,13 @@ signal undo_requested()
 ## The entry took or lost the keyboard. [RoomInput] is disabled while it holds it.
 signal typing_changed(typing: bool)
 
+## Escape was pressed with nothing being typed and nothing held.
+##
+## The interface does not own the menu -- [RoomClient] does, because the stack draws over
+## everything including this -- so this asks rather than opens. Same shape as
+## [signal undo_requested].
+signal pause_requested()
+
 ## Lines kept in the chat log.
 ##
 ## Bounded because every one of them is a [Label] in a container: a chat room left open
@@ -278,6 +285,14 @@ func held_prop() -> StringName:
 	return _held
 
 
+## Whether anything is selected in the palette.
+##
+## Asked by the Escape ladder, which has to know whether there is something to put down
+## before it decides that "nothing to stop" means "open the menu".
+func has_held() -> bool:
+	return _held != &""
+
+
 ## Puts the palette down. Called when a placement is made and when Escape is pressed.
 func clear_held() -> void:
 	_held = &""
@@ -383,13 +398,17 @@ func _unhandled_input(event: InputEvent) -> void:
 		cycle_channel()
 		get_viewport().set_input_as_handled()
 	elif key.keycode == KEY_ESCAPE:
+		# A ladder, innermost first: stop typing, then put the palette down, then open
+		# the menu. One key for "stop what you are doing", and the menu is what is left
+		# when there is nothing else to stop -- which is what every other client in this
+		# family does and what this one did not do at all.
 		if is_typing():
 			_entry.text = ""
 			_stop_typing()
-		else:
-			# Escape with nothing being typed puts the palette down. One key for "stop
-			# what you are doing" rather than two that do almost the same thing.
+		elif has_held():
 			clear_held()
+		else:
+			pause_requested.emit()
 
 		get_viewport().set_input_as_handled()
 	elif key.keycode == KEY_BACKSPACE and not is_typing():

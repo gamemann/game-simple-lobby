@@ -41,8 +41,8 @@ done < <(find game examples tools -name '*.gd' 2>/dev/null | sort)
 [ "$fails" -eq 0 ] && printf '  %sok%s   every script parses\n' "$GRN" "$OFF"
 
 echo
-echo "the copy in dot-server-setup-test"
-# game/ and scenes/ are copied into ../dot-server-setup-test by its setup.sh -- copied
+echo "the copy in dot-server-deploy"
+# game/ and scenes/ are copied into ../dot-server-deploy by its setup.sh -- copied
 # rather than linked, because they are compiled into that build and a symlink dangles
 # in a container or a tarball. Both are gitignored there, so this repository is the
 # only record of what they should contain.
@@ -52,7 +52,7 @@ echo "the copy in dot-server-setup-test"
 # the copy it has -- this one on the fix, that one on the code an operator actually
 # runs. Different code, both green. That project checks the same thing from its side;
 # this is the half that tells the person who caused it.
-COPY="../dot-server-setup-test"
+COPY="../dot-server-deploy"
 if [ -d "$COPY/game" ]; then
     stale=0
     for dir in game scenes; do
@@ -64,7 +64,7 @@ if [ -d "$COPY/game" ]; then
                 printf '  %sFAIL%s %s/%s is not in the copy\n' "$RED" "$OFF" "$dir" "$rel"
                 stale=$((stale + 1))
             elif ! cmp -s "$dir/$rel" "$COPY/$dir/$rel"; then
-                printf '  %sFAIL%s %s/%s differs; re-run ../dot-server-setup-test/setup.sh\n' \
+                printf '  %sFAIL%s %s/%s differs; re-run ../dot-server-deploy/setup.sh\n' \
                     "$RED" "$OFF" "$dir" "$rel"
                 stale=$((stale + 1))
             fi
@@ -73,20 +73,21 @@ if [ -d "$COPY/game" ]; then
     done
 
     if [ "$stale" -eq 0 ]; then
-        printf '  %sok%s   dot-server-setup-test has this lobby\n' "$GRN" "$OFF"
+        printf '  %sok%s   dot-server-deploy has this lobby\n' "$GRN" "$OFF"
     else
         fails=$((fails + stale))
     fi
 else
     # Not cloned beside this one, or never set up. There is no copy to be stale.
-    printf '  %s--%s   ../dot-server-setup-test has no lobby copied in yet\n' "$RED" "$OFF"
+    printf '  %s--%s   ../dot-server-deploy has no lobby copied in yet\n' "$RED" "$OFF"
 fi
 
 if [ "${1:-}" = "--parse" ]; then
     exit $((fails > 0))
 fi
 
-for scene in examples/headless_room examples/headless_net examples/dedicated examples/sandbox; do
+for scene in examples/headless_room examples/headless_presentation \
+             examples/headless_net examples/dedicated examples/sandbox; do
     [ -f "$scene.tscn" ] || continue
     echo
     echo "running $scene"

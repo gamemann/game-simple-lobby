@@ -36,6 +36,18 @@ const CAMERA_MARGIN := 0.06
 ##
 ## Null with nothing registered means offline: there is no server, and
 ## [method _build_offline] stands one up in this tree instead.
+## The player asked to leave from the pause menu.
+##
+## [b]Announced rather than acted on, and that is the same rule game-arena's browser
+## follows.[/b] What "leave" means belongs to whatever loaded this client: a shell that
+## downloaded a pack goes back to its own menu, an embedded page closes the frame, a
+## development scene quits. A client that called `get_tree().quit()` itself would be one
+## that cannot be embedded in anything.
+##
+## Nothing connected to it is a pause menu whose Leave button closes the menu, which is
+## the honest behaviour for a host that has nowhere to go.
+signal leave_requested()
+
 var link: DotClientLink = null
 
 var world: RoomWorld = null
@@ -59,6 +71,13 @@ var voice: RoomVoice = null
 ## What people have put in the room, mirrored. Both ends collide against it.
 var props: RoomProps = null
 
+## Settings, audio, effects and the console. Everything that belongs to the person at the
+## keyboard rather than to the room.
+var presentation: RoomPresentation = null
+
+## The escape menu. See [RoomMenus].
+var menus: DotScreenStack = null
+
 ## occupant id -> the avatar rows the server sent. Drawn by [RoomRenderer].
 var _avatars: Dictionary = {}
 
@@ -79,6 +98,10 @@ var _offline: RoomOffline = null
 
 
 func _ready() -> void:
+	# [b]First, and before the interface.[/b] The settings document decides how many chat
+	# lines the interface draws and whether it timestamps them, so a presentation layer
+	# built afterwards would be read by a screen that had already laid itself out.
+	_build_presentation()
 	_build_chat()
 	_build_view()
 
@@ -107,6 +130,14 @@ func _exit_tree() -> void:
 
 
 # --- Building --------------------------------------------------------------
+
+## Settings, audio, effects and the console.
+func _build_presentation() -> void:
+	presentation = RoomPresentation.new()
+	presentation.name = "Presentation"
+	presentation.client = self
+	add_child(presentation)
+	DotLog.result("room.client", "the presentation layer", presentation.setup())
 
 ## The chat client, before the interface, because the interface reads its channels.
 func _build_chat() -> void:
@@ -185,10 +216,13 @@ func _build_view() -> void:
 	ui.chat = chat
 	ui.chat_submitted.connect(_on_chat_submitted)
 	ui.place_requested.connect(_on_place_requested)
+	ui.pause_requested.connect(_toggle_pause)
 	ui.undo_requested.connect(func() -> void:
 		if bridge != null:
 			bridge.ask_to_undo()
 	)
+
+	_build_menus(layer)
 	# The one wiring that matters: while a text field has the keyboard, WASD is text.
 	ui.typing_changed.connect(func(typing: bool) -> void:
 		input.enabled = not typing
@@ -294,9 +328,15 @@ func _connect_bridge() -> void:
 	if props != null:
 		# One line in the feed when something appears, because a bench materialising with
 		# no explanation reads as a glitch and a sentence does not.
-		props.placed.connect(func(_place_id: int, def: DotPropDef, _at: Vector2) -> void:
+		props.placed.connect(func(_place_id: int, def: DotPropDef, at: Vector2) -> void:
 			if _roster_ready:
 				ui.add_notice("A %s was put down." % def.name_or_id().to_lower())
+			if presentation != null:
+				# Positional, on the XZ plane, which is the convention every addon in this
+				# family uses for a 2D world -- dot-npc maps one onto it so its senses and
+				# navigation run unchanged, and dot-audio and dot-fx take the same shape so
+				# one call serves both dimensions.
+				presentation.on_prop_placed(at)
 		)
 
 	bridge.hello_received.connect(func(occupant_id: int) -> void:
@@ -388,7 +428,14 @@ func _physics_process(delta: float) -> void:
 			bridge.client_tick(net.clock.input_tick(), command)
 
 
-func _process(_delta: float) -> void:
+func _process(delta: float) -> void:
+	if presentation != null:
+		# Once a frame, with the camera's position. dot-audio culls by distance from the
+		# listener and dot-fx ages its instances, and neither of them ticks itself -- for
+		# the reason everything tickable in this family is explicit: `_process` does not
+		# run while a tree is paused, and a pause menu is exactly when nothing finishes.
+		presentation.present(delta, _camera.global_position if _camera != null else Vector2.ZERO)
+
 	if net != null:
 		# Every frame, not every tick: this is what turns fifteen snapshots a second into
 		# smooth motion, and it is sampled at the render tick rather than the simulation
@@ -410,6 +457,13 @@ func _process(_delta: float) -> void:
 
 
 func _unhandled_input(event: InputEvent) -> void:
+	# [b]The console before anything else that reads a key.[/b] This game turns letters
+	# into shortcuts -- Tab cycles a channel, Enter starts typing -- so without this,
+	# typing `settings` into the console would cycle the channel four times and open the
+	# chat box. It is the line every game that ships a console forgets.
+	if presentation != null and presentation.swallows_input():
+		return
+
 	# [b]Voice first, and it is the one thing that must be seen while typing.[/b] The
 	# talk key is not a movement key and the interface only takes the keyboard for text;
 	# a release swallowed because a text field had focus is a microphone left open, which
@@ -429,6 +483,51 @@ func _unhandled_input(event: InputEvent) -> void:
 
 	if input != null:
 		input.handle_event(event)
+
+
+## The escape menu, on the same layer the interface is drawn on.
+##
+## [b]`manage_mouse` is off.[/b] The stack forces CAPTURED whenever nothing is open, which
+## is right for a first-person game and wrong for this one: the lobby is played with a
+## visible cursor -- a click places a prop -- so a stack that recaptured the mouse every
+## time a menu closed would take the pointer away from the one control scheme this game
+## has. dot-ui's own notes say two owners fighting over the mouse is a cursor that
+## flickers; here there is one owner and it is the game.
+func _build_menus(layer: CanvasLayer) -> void:
+	menus = DotScreenStack.new()
+	menus.name = "Menus"
+	menus.register_service = false
+	menus.manage_mouse = false
+	layer.add_child(menus)
+
+	var settings: DotSettingsManager = (
+		presentation.settings if presentation != null else null
+	)
+	var pause := RoomMenus.install(menus, settings)
+
+	pause.leave_pressed.connect(func() -> void:
+		# Closing the menu first, so a client that cannot actually leave -- an embedded
+		# one, a single-process test -- is not left staring at a pause screen over a game
+		# that carried on running behind it.
+		menus.pop(&"pause")
+		leave_requested.emit()
+	)
+
+
+## Opens or closes the pause menu.
+##
+## Nothing else may be open when it opens: a player pressing Escape in a settings screen
+## means "go back", which the stack's own back key already does, and a pause screen pushed
+## on top of settings would be two menus deep for one press.
+func _toggle_pause() -> void:
+	if menus == null:
+		return
+
+	if menus.top() != null and not menus.is_open(&"pause"):
+		menus.pop()
+		return
+
+	menus.toggle(&"pause")
 
 
 ## A click that is a placement rather than a step. False when it is not one.
@@ -518,6 +617,17 @@ func _on_chat_message(message: DotChatMessage, channel_id: StringName) -> void:
 	if occupant != null:
 		occupant.say(message.text, Time.get_ticks_msec())
 
+	if presentation != null:
+		# A whisper and a mention are worth a noise and a tint; an ordinary line is worth
+		# a quieter noise with a cooldown on it, because a room of twenty people typing is
+		# twenty notifications a second and that is a fire alarm rather than a busy room.
+		var me := bridge.local_occupant_id if bridge != null else 0
+		var mine := world.occupant_for(me)
+		var mentioned := mine != null and message.text.to_lower().contains(
+			mine.display_name.to_lower()
+		)
+		presentation.on_message(channel_id, mentioned)
+
 
 # --- Props -----------------------------------------------------------------
 
@@ -549,6 +659,12 @@ func _on_roster_changed(occupant_id: int, present: bool) -> void:
 		"%s joined." % who if present else "%s left." % who,
 		Color(0.55, 0.85, 0.60) if present else Color(0.85, 0.60, 0.55)
 	)
+
+	if presentation != null:
+		if present:
+			presentation.on_join(occupant_id)
+		else:
+			presentation.on_leave(occupant_id)
 
 
 func _on_disconnected(reason: String) -> void:

@@ -14,7 +14,7 @@ I intend on reviewing code, testing, and editing documentation regularly. If you
 ## The Staging Area
 A lobby. You walk about in a small 2D room, you can see who else is in it, and you can talk to them.
 
-Part of the [dot-*](https://github.com/modcommunity) family. It is the game a [dot-server](https://github.com/modcommunity/dot-server) runs when it is not running anything else — the staging area a player lands in, and the place they wait while an operator changes the game under them.
+Part of the [dot-*](https://github.com/modcommunity) family. It is the game a [dot-server](https://github.com/modcommunity/dot-server) runs when it is not running anything else. It is the staging area a player lands in, and the place they wait while an operator changes the game under them.
 
 ```bash
 godot --path .                                   # the launcher

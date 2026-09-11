@@ -5,7 +5,7 @@ extends RefCounted
 ##
 ## Deliberately not a [Node]. The state has to be snapshotted, rewound and replayed
 ## several times a second by [DotNetPredictor], and a state that lives on a [Node2D]
-## cannot be any of those without touching the scene tree — dot-fps-controller and dot-2d
+## cannot be any of those without touching the scene tree — dot-player-controller and dot-2d
 ## both split it for that reason and this follows them.
 ##
 ## [b]The id is the session id, never the peer id.[/b] A peer id is reassigned the moment

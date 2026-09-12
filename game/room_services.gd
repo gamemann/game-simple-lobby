@@ -486,6 +486,12 @@ func _build_relay() -> DotResult:
 
 	relay.site_command.connect(_on_site_command)
 
+	# [b]Tell the clients.[/b] Nothing here hides the chat box for it — in a lobby the chat
+	# IS the game — but a client that knows the room is also on the website can say so, and
+	# every other game in this family uses the same answer to decide whether to draw a box.
+	if server != null and server.chat != null:
+		server.chat.watch_relay(relay)
+
 	return DotResult.success(relay)
 
 

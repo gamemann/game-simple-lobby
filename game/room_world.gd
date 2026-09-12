@@ -239,8 +239,26 @@ func add_occupant(id: int, display_name: String) -> DotResult:
 	#
 	# Resolved with the same static function the simulation uses, so the two cannot
 	# drift apart.
+	# [b]The director picks the seat; the arena's own scatter is the fallback.[/b]
+	# `RoomPlayerStack` lays a ring of eight sites inside the room and scores them by
+	# distance from everybody already standing about — which is exactly what stops four
+	# people who joined in the same second from arriving on top of each other, and is
+	# what `arena.spawn_position` cannot do because it knows the rectangle and nothing
+	# that is in it. Until this call the ring was built and nothing ever asked for a seat.
+	#
+	# The furniture resolve stays either way: a ring site can still land in a bench, and
+	# a lobby that puts somebody inside a pillar is broken quietly.
+	var at := arena.spawn_position(id, RoomContent.OCCUPANT_RADIUS * 4.0)
+
+	if player_stack != null:
+		var seat := player_stack.choose_seat(id)
+
+		if seat.ok:
+			var origin := (seat.value as DotSpawnChoice).transform.origin
+			at = Vector2(origin.x, origin.y)
+
 	var placed := RoomContent.resolve_furniture(
-		arena.spawn_position(id, RoomContent.OCCUPANT_RADIUS * 4.0),
+		at,
 		RoomContent.OCCUPANT_RADIUS,
 		[]
 	)
@@ -262,6 +280,20 @@ func add_occupant(id: int, display_name: String) -> DotResult:
 ##
 ## The signal fires before the entry is erased, so a listener can still ask who left —
 ## which is the entire content of a leave notification.
+
+## Puts a placed prop on the layout's `prop` layer.
+##
+## [b]Duck-typed from [RoomProps], which is handed a `world: Node` rather than this
+## class.[/b] `RoomProps` is written to run under any host node — that is what makes it
+## testable without a world — so it asks whether the host can classify rather than naming
+## `RoomWorld`, which is the same shape `DotTeamSpectate` uses to reach dot-spectate.
+func classify_prop(node: Node) -> void:
+	if player_stack == null or node == null:
+		return
+
+	var _put := player_stack.classify(node, &"prop")
+
+
 func remove_occupant(id: int) -> bool:
 	var occupant := occupant_for(id)
 

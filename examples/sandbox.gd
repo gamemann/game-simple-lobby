@@ -46,6 +46,15 @@ var _heard: Array[DotChatMessage] = []
 ## prevent, and the one nobody would notice because the message still arrives.
 var _legacy_heard: Array[Dictionary] = []
 
+## The one thing dot-server's chat signal legitimately carries here.
+##
+## [b]Not a line, which is why it is kept apart from [member _legacy_heard].[/b]
+## [code]DotChatManager.greet[/code] sends `{kind: "state", relay: bool}` to a joining
+## client to say whether anything else is carrying the conversation. It has no text and
+## draws nothing; counting it as a delivered message would have made the check above read
+## as two paths for one line, which is the failure that check exists for.
+var _chat_state: Array[Dictionary] = []
+
 var _other_side: Node = null
 var _other_link: DotClientLink = null
 var _other: RoomClient = null
@@ -269,6 +278,10 @@ func _test_join() -> bool:
 	# this game's own wire; a test that still listened there would pass on a server
 	# running the old path and fail on the one that ships.
 	_link.chat_received.connect(func(payload: Dictionary) -> void:
+		if str(payload.get("kind", "")) == "state":
+			_chat_state.append(payload)
+			return
+
 		_legacy_heard.append(payload)
 	)
 
@@ -377,6 +390,15 @@ func _test_chat() -> void:
 		"on the server too, which is what `room_who` reports from"
 	)
 
+	# [b]And the one payload that legitimately comes down dot-server's chat signal.[/b]
+	# A joining client is told what is carrying the conversation before it has any line to
+	# draw, so it can decide whether to draw a chat box at all rather than drawing one and
+	# taking it away a moment later.
+	_check(
+		_chat_state.size() >= 1,
+		"the server told the client what is carrying chat, on joining (%d)" % _chat_state.size()
+	)
+
 	_check(
 		_legacy_heard.is_empty(),
 		"and dot-server's own chat delivered nothing beside it (%d)"
@@ -451,6 +473,10 @@ func _test_two_people() -> void:
 	var spawned := [false]
 	_other_link.spawned.connect(func() -> void: spawned[0] = true)
 	_other_link.chat_received.connect(func(payload: Dictionary) -> void:
+		if str(payload.get("kind", "")) == "state":
+			_chat_state.append(payload)
+			return
+
 		_legacy_heard.append(payload)
 	)
 

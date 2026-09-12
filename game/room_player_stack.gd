@@ -83,10 +83,18 @@ func _exit_tree() -> void:
 
 # --- Building ---------------------------------------------------------------
 
+## Builds the physics node, and applies the engine half of it only where that is wanted.
+##
+## [b]The LAYOUT is built on every instance, including a client that applies nothing.[/b]
+## This used to return before creating the node at all when `apply_physics` was off, which
+## left a client with no layout — and a collision layout is not a local preference, it is
+## the numbers written into `collision_layer` on nodes both ends build. A server that put
+## props on the prop bit while its clients left them on bit 0 would be two worlds with
+## different collision matrices, agreeing only because nothing had ever read the layout.
+##
+## What `apply_physics` still gates is `setup()`, which writes ProjectSettings: the tick
+## rate, gravity and damping. Those are the server's to decide.
 func _build_physics() -> DotResult:
-	if not apply_physics:
-		return DotResult.success(null)
-
 	physics = DotPhysicsWorld.new()
 	physics.name = "Physics"
 	# The project's own numbers with one change. The lobby's movement is dot-2d's own
@@ -98,6 +106,15 @@ func _build_physics() -> DotResult:
 	physics.register_service = false
 	physics.write_layer_names = false
 	add_child(physics)
+
+	# The layout alone, so `classify` answers on a client too.
+	var built := physics.layout.build()
+
+	if not built.ok:
+		return built.wrap("The collision layout")
+
+	if not apply_physics:
+		return DotResult.success(null)
 
 	return physics.setup().wrap("the lobby's physics profile")
 
@@ -151,6 +168,18 @@ func _build_characters() -> void:
 		DotLog.error(CHANNEL, "character catalogue", {"why": res.error.message})
 
 
+## Classes in a lobby are a CHOICE, not a set of numbers, and nothing applies them.
+##
+## [b]Deliberate, and the reason is this game's shape rather than an omission.[/b] The
+## other four games write a class's `max_health` onto a [DotHealth] and its
+## `move_speed_scale` onto that player's own tunables — `DotPlayerClassApply` is the
+## bridge for it. A lobby has neither: nobody has health, and `RoomWorld` holds ONE
+## `Dot2DTunables` that every occupant's motor shares, so a per-player speed scale written
+## there would be everybody's speed scale.
+##
+## What the class is for here is the thing a lobby is for: picking one before the match
+## that will use it, and having a server agree you may. The numbers travel on the document
+## and land in the game that reads them.
 func _build_classes() -> void:
 	classes = DotPlayerClassManager.new()
 	classes.name = "Classes"
@@ -296,6 +325,80 @@ func sides() -> Dictionary:
 		out[String(team_id)] = teams.members(team_id)
 
 	return out
+
+
+
+## The dot-spectate team number for [param key], derived from the side they are on.
+##
+## [b]An index, not a hash, and zero means "no side".[/b] dot-spectate keys teams by
+## [code]int[/code] and treats 0 as no team at all — two entities with no team are never
+## team-mates, so a free-for-all cannot accidentally become a truce. The playing sides
+## are numbered from 1 in the order the set declares them, which is the same rule
+## `DotTeamRoster._match_team_id` uses to push an assignment down into dot-match.
+##
+## Somebody unassigned, spectating, or not in the roster at all gets 0. That is the part
+## a hardcoded `return 1` got wrong: a spectator read as a team-mate of everybody.
+func team_index_of(key: String) -> int:
+	if teams == null:
+		return 0
+
+	var side := teams.team_of(key)
+
+	if side == &"" or not teams.teams.is_playing(side):
+		return 0
+
+	return teams.teams.playing_ids().find(side) + 1
+
+
+
+## Puts [param node] on the layout's [param layer_id] layer, with that layer's mask.
+##
+## [b]The half of dot-physics that was never used.[/b] The layout was assigned and its
+## layer names were written into ProjectSettings for the inspector to show — and every
+## body in this game stayed on Godot's default layer 1 with mask 1, so the inspector
+## labelled layers nothing followed. Naming a layer is only half of a layout.
+func classify(node: Node, layer_id: StringName) -> DotResult:
+	if physics == null or physics.layout == null:
+		return DotResult.fail(DotError.CODE_STATE, "No collision layout.")
+
+	return physics.classify(node, layer_id)
+
+
+## Puts every collision object under [param root] on [param layer_id]. Returns how many.
+##
+## One call rather than a call per body: the geometry is built by a class that describes
+## boxes, and a physics decision belongs here rather than inside that description. Nodes
+## that are not collision objects are skipped, so a whole scene can be handed in.
+func classify_tree(root: Node, layer_id: StringName) -> int:
+	if root == null or physics == null or physics.layout == null:
+		return 0
+
+	var done := 0
+
+	if root is CollisionObject3D or root is CollisionObject2D:
+		if classify(root, layer_id).ok:
+			done += 1
+
+	for child in root.get_children():
+		done += classify_tree(child, layer_id)
+
+	return done
+
+
+## The mask a player's movement sweeps against, out of the layout.
+##
+## [b]`DotFpsTunables.collision_mask` defaults to 1 and no game here had ever set it.[/b]
+## One is correct only while everything is on bit 0, which is the state a layout exists to
+## end — so the moment props moved to their own layer, a mask of 1 was a player who walks
+## through every crate in the map, and nothing would have said so: a sweep that hits
+## nothing is a sweep, not an error.
+func player_collision_mask() -> int:
+	if physics == null or physics.layout == null:
+		return 1
+
+	return physics.layout.collision_mask(&"player")
+
+
 
 
 func describe_lines() -> PackedStringArray:

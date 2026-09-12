@@ -15,7 +15,7 @@ extends Node
 ##
 ## Exits non-zero on any failure.
 
-const CHECKS := 57
+const CHECKS := 66
 
 var _passed := 0
 var _failed := 0
@@ -41,6 +41,7 @@ func _run() -> void:
 	_test_effects_respect_the_player()
 	_test_console()
 	_test_party()
+	_test_chat_key()
 	await _test_escape_menu()
 
 	print("")
@@ -461,3 +462,67 @@ func _check(condition: bool, what: String, detail: String = "") -> bool:
 		print("  FAIL  %s" % what)
 		_failures.append(what if detail == "" else "%s — %s" % [what, detail])
 	return condition
+
+
+func _test_chat_key() -> void:
+	_section("The key that opens a chat room's own chat")
+
+	var s := RoomPresentation.schema()
+	var def := s.find(&"chat_open_key")
+
+	_check(def != null, "the open key is a declared setting")
+
+	if def == null:
+		_done()
+		return
+
+	_check(def.kind == DotSettingsDef.Kind.BINDING, "declared as a binding, not as text")
+	_check(str(def.default_value) == "Y", "defaulting to Y, like every other game here")
+	_check(
+		def.scope == DotSettingsDef.Scope.ACCOUNT,
+		"and following the person between games rather than sitting on one machine"
+	)
+
+	# [b]No on/off switch, and this is the one game where that is right.[/b] Everywhere
+	# else the box is drawn over a game and "I chat somewhere else" is a sensible thing for
+	# a player to say; here the log, the roster and the entry ARE the game.
+	_check(
+		s.find(&"chat_window") == null,
+		"and there is no setting that turns a lobby's chat off",
+		"a lobby with its chat hidden is a person standing in an empty room"
+	)
+
+	# The action the entry actually listens on, and what a rebind does to it.
+	DotInputBinding.ensure_action(RoomUi.OPEN_CHAT_ACTION, "Y")
+	_check(
+		DotInputBinding.describe_action(RoomUi.OPEN_CHAT_ACTION) == "Y",
+		"the action exists at the default binding"
+	)
+
+	var p := RoomPresentation.new()
+	p.name = "PChat"
+	add_child(p)
+	p.setup()
+	# A memory store: a suite that writes to `user://` is a suite whose result depends on
+	# what the last run left there.
+	p.settings.local_store = DotSettingsStoreMemory.new()
+	p.settings.load_now()
+
+	p.settings.set_value(&"chat_open_key", "T")
+	_check(
+		DotInputBinding.describe_action(RoomUi.OPEN_CHAT_ACTION) == "T",
+		"rebinding through the settings document moves it"
+	)
+	_check(
+		InputMap.action_get_events(RoomUi.OPEN_CHAT_ACTION).size() == 1,
+		"and leaves ONE binding, not the old one as well"
+	)
+
+	p.settings.set_value(&"chat_open_key", "")
+	_check(
+		DotInputBinding.describe_action(RoomUi.OPEN_CHAT_ACTION) == "T",
+		"an empty binding is ignored rather than leaving the room with no way in"
+	)
+
+	InputMap.erase_action(RoomUi.OPEN_CHAT_ACTION)
+	_done()

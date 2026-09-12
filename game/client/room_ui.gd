@@ -40,6 +40,14 @@ signal pause_requested()
 ##
 ## Bounded because every one of them is a [Label] in a container: a chat room left open
 ## overnight is otherwise a few hundred thousand nodes.
+## The action that gives the entry the keyboard.
+##
+## [b]An action rather than a key, so the binding is the player's.[/b] It is stored in the
+## lobby's settings document under `chat_open_key` and defaults to Y, which is what every
+## other game in this family opens chat with. Enter still works and always will: this is a
+## chat room, and a chat room that ignores Enter is broken.
+const OPEN_CHAT_ACTION := &"room_chat"
+
 const MAX_CHAT_LINES := 120
 
 ## Layout, in pixels. Named because three of them are used twice and a magic number used
@@ -186,6 +194,10 @@ func _build() -> void:
 	_entry.focus_entered.connect(func() -> void: typing_changed.emit(true))
 	_entry.focus_exited.connect(_stop_typing)
 	chat_box.add_child(_entry)
+
+	# Created at Y only if the project does not already declare it — a player who has
+	# rebound chat keeps what they chose, and the settings document is what carries it.
+	DotInputBinding.ensure_action(OPEN_CHAT_ACTION, "Y")
 
 	_build_palette()
 	_set_channel(_channel)
@@ -391,7 +403,11 @@ func _unhandled_input(event: InputEvent) -> void:
 
 	var key := event as InputEventKey
 
-	if key.keycode == KEY_ENTER or key.keycode == KEY_KP_ENTER:
+	if (
+		key.keycode == KEY_ENTER
+		or key.keycode == KEY_KP_ENTER
+		or (InputMap.has_action(OPEN_CHAT_ACTION) and event.is_action_pressed(OPEN_CHAT_ACTION))
+	):
 		start_typing()
 		get_viewport().set_input_as_handled()
 	elif key.keycode == KEY_TAB and is_typing():

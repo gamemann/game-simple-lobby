@@ -366,10 +366,11 @@ tools/check.sh                # all four, after a parse pass
 | | | |
 | --- | --- | --- |
 | `headless_room` | 41 | the room alone. Membership, walls, and two worlds replaying the same commands bit-identically |
-| `headless_presentation` | 45 | settings, audio, effects, the console and the party — **none of which `headless_room` can reach**, because that one is `RoomWorld` alone and has no client in it |
+| `headless_stack` | 23 | the player layer: the collision layout, the two sides, the class as a choice nothing applies, and the ring of seats |
+| `headless_presentation` | 66 | settings, audio, effects, the console and the party — **none of which `headless_room` can reach**, because that one is `RoomWorld` alone and has no client in it |
 | `headless_net` | 65 | every encoder against its decoder, then a session over a lossy delaying loopback, then a walk into the furniture |
 | `dedicated` | 81 | a real `DotServer`, a real module, a real WebSocket listener, and the props, chat, voice, moderation and identity halves |
-| `sandbox` | 61 | **a real server and two real clients, over real sockets, in one process** — chat, props and voice all cross a wire here and nowhere else |
+| `sandbox` | 62 | **a real server and two real clients, over real sockets, in one process** — chat, props and voice all cross a wire here and nowhere else |
 
 **`sandbox` is the one that matters and the slowest to write.** It is the only place
 dot-server's signon, the RPC node paths, dot-server's chat and this game's netcode run at
@@ -539,6 +540,16 @@ Two settings are the opposite of every other game's and both are deliberate:
 `occupant_left` is connected rather than the camera being told directly, and the order
 matters: dot-spectate picks a replacement from the participants list, so a game that
 reports the departure *before* removing the occupant picks the occupant who just left.
+
+## The one game that does not get a chat box, because it already is one
+
+Every other game in this family gained dot-ui's `DotChatWindow` — a log, a line to type in, and `Y` to open it — because four of them could be talked to and could not talk back. This one is the exception, and the reason is worth writing down: `RoomUi` already draws the chat log, the channel palette, the roster and the entry, and **they are the game**. Dropping a second chat box over a chat room would be two boxes for one conversation.
+
+What it takes from the family instead is the key. `RoomUi.OPEN_CHAT_ACTION` is an `InputMap` action, `chat_open_key` in the lobby's settings document sets it, and it defaults to `Y` like everywhere else. **Enter still works and always will**: this is a chat room, and a chat room that ignores Enter is broken.
+
+**There is deliberately no `chat_window` setting here, and this is the only game where that is right.** Everywhere else the box is drawn over a game and "I chat somewhere else" is a sensible thing for a player to say. Here, turning it off leaves a person standing in an empty room with no way to say so. `headless_presentation` asserts the setting's *absence*, so nobody adds it later for symmetry.
+
+The server still tells its clients what is carrying chat — `RoomServices` points `DotChatManager.watch_relay` at the relay it builds — because every other game uses that answer and the lobby is where the site's relay is most likely to be on. Nothing here hides anything for it.
 
 ## Things deliberately not here
 

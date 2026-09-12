@@ -335,6 +335,14 @@ func place(owner_id: int, prop_id: StringName, at: Vector2, rotation: float = 0.
 	if instance.node is RoomProp:
 		(instance.node as RoomProp).configure(def)
 
+	# [b]On the layout's `prop` layer.[/b] A placed prop arrives on Godot's default layer
+	# 1 masking layer 1 — the bit `top_down_2d` calls `world` — so two props placed in the
+	# same spot were transparent to each other while both were solid against the room. The
+	# lobby is mostly analytic (`Dot2DArena`), which makes these the only bodies here
+	# whose layers mean anything, and is why setting them is two lines.
+	if _world != null and _world.has_method("classify_prop") and instance.node != null:
+		_world.call("classify_prop", instance.node)
+
 	# Frozen through the physics gun's own call rather than by assigning `freeze`, because
 	# that is the one place in dot-props that also zeroes the velocities — and a body
 	# frozen with a velocity applies it the instant anything thaws it.

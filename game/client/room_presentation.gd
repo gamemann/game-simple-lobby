@@ -105,6 +105,19 @@ static func schema() -> DotSettingsSchema:
 		DotSettingsDef.Scope.ACCOUNT
 	))
 
+	# The key that gives the entry the keyboard. Y, which is what every other game in this
+	# family opens chat with, and this one also answers Enter because it is a chat room and
+	# a chat room that ignores Enter is broken.
+	#
+	# [b]There is deliberately no `chat_window` setting here, and this is the one game
+	# where that is right.[/b] Everywhere else the box is something drawn over a game and a
+	# player can sensibly say "I chat somewhere else"; here the chat log, the roster and
+	# the entry ARE the game, and turning them off leaves a person standing in an empty
+	# room with no way to say so.
+	s.add(DotSettingsDef.binding(&"chat_open_key", "Y", &"chat").with_scope(
+		DotSettingsDef.Scope.ACCOUNT
+	))
+
 	# The only one a server may touch here, and it is the only one worth touching: a room
 	# that wants everybody to hear everybody caps the proximity range at its own width.
 	s.add(DotSettingsDef.number(&"near_range", 420.0, 60.0, 2000.0, &"chat").with_scope(
@@ -156,6 +169,16 @@ func _on_setting_changed(key: StringName, value: Variant, _why: StringName) -> v
 		&"allow_flashes":
 			if fx != null:
 				fx.config.allow_flashes = bool(value)
+		&"chat_open_key":
+			# Empty is left alone rather than applied: a settings file somebody cleared
+			# the field in would otherwise leave a chat room with no way into its own
+			# chat box but Enter.
+			if str(value).strip_edges() != "":
+				var bound := DotInputBinding.apply(RoomUi.OPEN_CHAT_ACTION, str(value))
+				if bound == "":
+					DotLog.warn(CHANNEL, "a chat key was not understood", {
+						"binding": str(value)
+					})
 		_:
 			pass
 

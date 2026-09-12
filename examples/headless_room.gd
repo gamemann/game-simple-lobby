@@ -9,7 +9,7 @@ extends Node
 ## Exits non-zero on any failure. No netcode, no server, no rendering — this is
 ## [RoomWorld] alone, which is the only part of the game that decides anything.
 
-const CHECKS := 41
+const CHECKS := 45
 
 var _passed := 0
 var _failed := 0
@@ -41,6 +41,7 @@ func _run() -> void:
 	_test_capacity()
 	_test_walking()
 	_test_bounds()
+	_test_wing()
 	_test_determinism()
 	_test_bubbles()
 	_test_spectating()
@@ -328,6 +329,71 @@ func _test_bounds() -> void:
 		at.x <= room.end.x - radius + 0.001 and at.y <= room.end.y - radius + 0.001,
 		"and somebody standing still outside it is put back (%.1f, %.1f)" % [at.x, at.y]
 	)
+	_done()
+
+
+## The partition and the room behind it.
+##
+## [b]A level here is a list of circles, so the only thing that proves it is a level is
+## walking it.[/b] Everything else about this room — the renderer, the roster, the
+## resolve — is happy with a wall that has a hole in it, or with one that has no way
+## through at all, and both of those are the same list with different numbers in it.
+func _test_wing() -> void:
+	_section("the wing behind the partition")
+
+	var world := _world(&"wing")
+	world.add_occupant(1, "Wanderer")
+
+	var occupant := world.occupant_for(1)
+
+	# Straight at a post, from the middle of the hall. Long enough to cross the whole
+	# room twice, so arriving at the wall is not a matter of how far they got.
+	occupant.state.position = Vector2(-200.0, 300.0)
+	occupant.state.velocity = Vector2.ZERO
+
+	for _i in range(600):
+		world.tick({1: _walk(Vector2.LEFT)})
+
+	_check(
+		not RoomContent.in_wing(occupant.position()),
+		"walking into the partition does not go through it (%.0f, %.0f)"
+			% [occupant.position().x, occupant.position().y]
+	)
+
+	# And the same walker, lined up with the doorway. Nothing steers here: the command
+	# is due west for the whole run, which is the point — a door that has to be aimed at
+	# is a door nobody uses.
+	occupant.state.position = Vector2(-200.0, 0.0)
+	occupant.state.velocity = Vector2.ZERO
+
+	for _i in range(600):
+		world.tick({1: _walk(Vector2.LEFT)})
+
+	var through := occupant.position()
+	_check(
+		RoomContent.in_wing(through),
+		"and the doorway leads into the wing (%.0f, %.0f)" % [through.x, through.y]
+	)
+
+	# Out again, so the wing is a room rather than a trap.
+	for _i in range(600):
+		world.tick({1: _walk(Vector2.RIGHT)})
+
+	_check(
+		not RoomContent.in_wing(occupant.position()),
+		"and back out to the hall (%.0f, %.0f)"
+			% [occupant.position().x, occupant.position().y]
+	)
+
+	# The wing has something in it. A second room with nothing to stand behind is a
+	# corridor with a wide end.
+	var standing := 0
+
+	for piece in RoomContent.furniture():
+		if RoomContent.in_wing(Vector2(piece.x, piece.y)):
+			standing += 1
+
+	_check(standing >= 3, "and something to stand behind when you get there (%d)" % standing)
 	_done()
 
 

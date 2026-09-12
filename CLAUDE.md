@@ -222,6 +222,16 @@ next tick, sixty times a second. The position stays correct and the movement rea
 lag — which is the worst way for a level to be wrong, because it sends the next person to
 the netcode.
 
+### A wall across it, and a second room behind that
+
+The room was one space, and one space is one conversation. dot-chat gives a channel a radius so that somebody across the room is not in your conversation, and in a single open hall that radius is either the whole room or an invisible line across the middle of it. A partition people walk round is the same rule made visible.
+
+Six posts on `RoomContent.WALL_X`, overlapping by twenty units each rather than merely touching — two tangent circles leave a contact point the resolve can push a walker straight through, because each circle on its own is happy to send them toward the other. The pair either side of the middle are the door posts and `DOORWAY_SPAN` between them is the only way across; it is wide enough to walk through without aiming, because a door that has to be aimed at is a door nobody uses.
+
+**The wing behind it has its own furniture** — two round tables and a bench against the west wall — with the middle left clear, so the doorway opens onto somewhere to walk rather than onto a table.
+
+`headless_room`'s **the wing behind the partition** section is what says any of that is true. A list of circles is happy to be a wall with a hole in it or a wall with no way through at all, and both of those are the same list with different numbers in it, so the section walks it: into a post and blocked, through the doorway and into the wing, and back out again. `RoomContent.in_wing` is read from the same constant the posts are placed from, because a check that wrote the number again would keep passing after the wall moved.
+
 **The spawn is resolved too.** `Dot2DArena.spawn_position` knows the room's rectangle and
 nothing about what is standing in it, so a share of its answers are inside something. A
 lobby that puts somebody inside a bench is broken quietly.
@@ -365,7 +375,7 @@ tools/check.sh                # all four, after a parse pass
 
 | | | |
 | --- | --- | --- |
-| `headless_room` | 41 | the room alone. Membership, walls, and two worlds replaying the same commands bit-identically |
+| `headless_room` | 45 | the room alone. Membership, walls, and two worlds replaying the same commands bit-identically |
 | `headless_stack` | 23 | the player layer: the collision layout, the two sides, the class as a choice nothing applies, and the ring of seats |
 | `headless_presentation` | 66 | settings, audio, effects, the console and the party — **none of which `headless_room` can reach**, because that one is `RoomWorld` alone and has no client in it |
 | `headless_net` | 65 | every encoder against its decoder, then a session over a lossy delaying loopback, then a walk into the furniture |

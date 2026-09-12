@@ -133,7 +133,61 @@ static func furniture() -> PackedVector3Array:
 		# Two benches by the east wall, far enough apart to stand between.
 		Vector3(700.0, -110.0, 60.0),
 		Vector3(700.0, 110.0, 60.0),
+
+		# --- The partition, and the wing behind it ---------------------------
+		#
+		# [b]The room had one space in it, and one space is one conversation.[/b]
+		# dot-chat gives a channel a radius so that somebody across the room is not
+		# in your conversation, and in a single open hall that radius is either the
+		# whole room or an invisible line across the middle of it. A wall people walk
+		# round is the same rule made visible: step through the doorway and you are
+		# out of earshot of the hall, which is a thing a player can see a reason for.
+		#
+		# Six posts on the WALL_X line, overlapping by 20 units each so there is no
+		# hairline gap between two tangent circles for a walker to be squeezed
+		# through by the resolve. The pair either side of the middle are the door
+		# posts and the DOORWAY_SPAN between them is the only way across.
+		Vector3(WALL_X, -460.0, POST_RADIUS),
+		Vector3(WALL_X, -300.0, POST_RADIUS),
+		Vector3(WALL_X, -140.0, POST_RADIUS),
+		Vector3(WALL_X, 140.0, POST_RADIUS),
+		Vector3(WALL_X, 300.0, POST_RADIUS),
+		Vector3(WALL_X, 460.0, POST_RADIUS),
+
+		# The wing itself: two round tables at either end and a bench against the
+		# west wall, so the middle of it stays clear and the doorway opens onto
+		# somewhere to walk rather than onto a table.
+		Vector3(-770.0, -330.0, 55.0),
+		Vector3(-770.0, 330.0, 55.0),
+		Vector3(-830.0, 0.0, 45.0),
 	])
+
+
+## Where the partition stands. West of the north-west and south-west pillars.
+const WALL_X := -620.0
+
+## The radius of a partition post.
+##
+## Sized so that neighbouring posts 160 apart overlap by 20 rather than touching: two
+## circles that merely touch leave a contact point that [method resolve_circles] can
+## push a walker straight through, because each circle on its own is happy to send them
+## toward the other.
+const POST_RADIUS := 90.0
+
+## How wide the way through is, edge to edge, in units.
+##
+## An occupant is [constant OCCUPANT_RADIUS] * 2 across, so this is a door somebody can
+## walk through without aiming — which is the difference between a second room and a
+## second room nobody goes into.
+const DOORWAY_SPAN := 280.0 - POST_RADIUS * 2.0
+
+
+## Whether [param at] is in the wing behind the partition rather than in the hall.
+##
+## [b]Read from the same constant the posts are placed from.[/b] A check that wrote
+## -620 again would keep passing after the wall moved.
+static func in_wing(at: Vector2) -> bool:
+	return at.x < WALL_X
 
 
 ## Pushes [param position] out of any furniture it is inside. Returns where it ends up.

@@ -1,5 +1,7 @@
 extends Node
 
+const RoomPaths := preload("../room_paths.gd")
+
 const RoomServices := preload("../room_services.gd")
 const RoomUi := preload("room_ui.gd")
 
@@ -273,7 +275,7 @@ static func fx_catalogue() -> DotFxCatalogue:
 
 	var ripple := DotFxDef.new()
 	ripple.id = &"prop_placed"
-	ripple.scene_path = "res://scenes/fx/place_ripple.tscn"
+	ripple.scene_path = RoomPaths.rebase("res://scenes/fx/place_ripple.tscn")
 	ripple.kind = DotFxDef.Kind.SPAWNED
 	ripple.lifetime_ms = 700
 	ripple.cost = 1

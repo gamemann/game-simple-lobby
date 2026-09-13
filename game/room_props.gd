@@ -1,5 +1,7 @@
 extends Node
 
+const RoomPaths := preload("room_paths.gd")
+
 const RoomContent := preload("room_content.gd")
 const RoomProp := preload("room_prop.gd")
 
@@ -57,7 +59,7 @@ const PLACE_INTERVAL := 0.35
 ## two games with a `game/prop.tscn` between them means one silently overwrites the other.
 ## This was called `prop.tscn` and collided with game-playground's on the first vendored
 ## build; that project's own collision check is what said so.
-const PROP_SCENE := "res://game/room_prop.tscn"
+static var PROP_SCENE := RoomPaths.rebase("res://game/room_prop.tscn")
 
 
 ## Somebody placed something. Both ends, and what the renderer redraws from.

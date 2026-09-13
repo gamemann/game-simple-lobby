@@ -1,5 +1,7 @@
 extends DotModule
 
+const RoomPaths := preload("room_paths.gd")
+
 const RoomBridge := preload("room_bridge.gd")
 const RoomContent := preload("room_content.gd")
 const RoomProps := preload("room_props.gd")
@@ -93,7 +95,7 @@ static func game_descriptor(manifest_url: String = "") -> DotGameDescriptor:
 	descriptor.metadata = {"kind": "lobby"}
 
 	if manifest_url == "":
-		descriptor.scene = "res://scenes/room_server.tscn"
+		descriptor.scene = RoomPaths.rebase("res://scenes/room_server.tscn")
 		descriptor.client_scene = ""
 	else:
 		descriptor.scene = "scenes/room_server.tscn"

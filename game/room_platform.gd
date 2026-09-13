@@ -1,6 +1,6 @@
 extends Node
 
-const RoomContent := preload("res://game/room_content.gd")
+const RoomContent := preload("room_content.gd")
 
 ## The identity half, in one node: who somebody is, what they are called, what they wear.
 ##

@@ -1,17 +1,17 @@
 extends Node2D
 
-const RoomBridge := preload("res://game/room_bridge.gd")
-const RoomContent := preload("res://game/room_content.gd")
-const RoomInput := preload("res://game/client/room_input.gd")
-const RoomMenus := preload("res://game/client/room_menus.gd")
-const RoomOffline := preload("res://game/room_offline.gd")
-const RoomPresentation := preload("res://game/client/room_presentation.gd")
-const RoomProps := preload("res://game/room_props.gd")
-const RoomRenderer := preload("res://game/client/room_renderer.gd")
-const RoomServices := preload("res://game/room_services.gd")
-const RoomUi := preload("res://game/client/room_ui.gd")
-const RoomVoice := preload("res://game/client/room_voice.gd")
-const RoomWorld := preload("res://game/room_world.gd")
+const RoomBridge := preload("../room_bridge.gd")
+const RoomContent := preload("../room_content.gd")
+const RoomInput := preload("room_input.gd")
+const RoomMenus := preload("room_menus.gd")
+const RoomOffline := preload("../room_offline.gd")
+const RoomPresentation := preload("room_presentation.gd")
+const RoomProps := preload("../room_props.gd")
+const RoomRenderer := preload("room_renderer.gd")
+const RoomServices := preload("../room_services.gd")
+const RoomUi := preload("room_ui.gd")
+const RoomVoice := preload("room_voice.gd")
+const RoomWorld := preload("../room_world.gd")
 
 ## Everything a person sees, in one scene.
 ##

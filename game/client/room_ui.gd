@@ -1,9 +1,9 @@
 extends Control
 
-const RoomContent := preload("res://game/room_content.gd")
-const RoomOccupant := preload("res://game/room_occupant.gd")
-const RoomProps := preload("res://game/room_props.gd")
-const RoomServices := preload("res://game/room_services.gd")
+const RoomContent := preload("../room_content.gd")
+const RoomOccupant := preload("../room_occupant.gd")
+const RoomProps := preload("../room_props.gd")
+const RoomServices := preload("../room_services.gd")
 
 ## The chat log, the entry, the roster and the join/leave feed.
 ##

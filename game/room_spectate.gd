@@ -1,7 +1,7 @@
 extends Node
 
-const RoomOccupant := preload("res://game/room_occupant.gd")
-const RoomWorld := preload("res://game/room_world.gd")
+const RoomOccupant := preload("room_occupant.gd")
+const RoomWorld := preload("room_world.gd")
 
 ## Watching somebody else in the room.
 ##

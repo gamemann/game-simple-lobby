@@ -1,7 +1,7 @@
 extends Node
 
-const RoomPlayerStack := preload("res://game/room_player_stack.gd")
-const RoomWorld := preload("res://game/room_world.gd")
+const RoomPlayerStack := preload("../game/room_player_stack.gd")
+const RoomWorld := preload("../game/room_world.gd")
 
 ## The player stack, run against a real room rather than against a stub.
 ##

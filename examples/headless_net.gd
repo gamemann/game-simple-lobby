@@ -1,11 +1,11 @@
 extends Node
 
-const RoomContent := preload("res://game/room_content.gd")
-const RoomEvent := preload("res://game/room_event.gd")
-const RoomEvents := preload("res://game/room_events.gd")
-const RoomNetCommand := preload("res://game/room_net_command.gd")
-const RoomOffline := preload("res://game/room_offline.gd")
-const RoomRequest := preload("res://game/room_request.gd")
+const RoomContent := preload("../game/room_content.gd")
+const RoomEvent := preload("../game/room_event.gd")
+const RoomEvents := preload("../game/room_events.gd")
+const RoomNetCommand := preload("../game/room_net_command.gd")
+const RoomOffline := preload("../game/room_offline.gd")
+const RoomRequest := preload("../game/room_request.gd")
 
 ## The netcode, over a lossy loopback: encoders, membership, prediction, interpolation.
 ##

@@ -1,9 +1,9 @@
 extends DotNetBehaviour
 
-const RoomBridge := preload("res://game/room_bridge.gd")
-const RoomContent := preload("res://game/room_content.gd")
-const RoomNetCommand := preload("res://game/room_net_command.gd")
-const RoomOccupant := preload("res://game/room_occupant.gd")
+const RoomBridge := preload("room_bridge.gd")
+const RoomContent := preload("room_content.gd")
+const RoomNetCommand := preload("room_net_command.gd")
+const RoomOccupant := preload("room_occupant.gd")
 
 ## The thirty lines [Dot2DNetSync] says belong in the game.
 ##

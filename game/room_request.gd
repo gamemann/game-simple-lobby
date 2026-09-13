@@ -1,7 +1,7 @@
 extends DotNetMessage
 
-const RoomEvents := preload("res://game/room_events.gd")
-const RoomRequest := preload("res://game/room_request.gd")
+const RoomEvents := preload("room_events.gd")
+const RoomRequest := preload("room_request.gd")
 
 ## Everything a client asks the authority for.
 ##

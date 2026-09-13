@@ -1,8 +1,8 @@
 extends SceneTree
 
-const RoomContent := preload("res://game/room_content.gd")
-const RoomProps := preload("res://game/room_props.gd")
-const RoomWorld := preload("res://game/room_world.gd")
+const RoomContent := preload("../game/room_content.gd")
+const RoomProps := preload("../game/room_props.gd")
+const RoomWorld := preload("../game/room_world.gd")
 
 ## Renders the room to a PNG so a person can look at it.
 ##

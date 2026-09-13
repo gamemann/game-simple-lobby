@@ -1,6 +1,6 @@
 extends DotNetInput
 
-const RoomNetCommand := preload("res://game/room_net_command.gd")
+const RoomNetCommand := preload("room_net_command.gd")
 
 ## One tick of a person's intent, on the wire.
 ##

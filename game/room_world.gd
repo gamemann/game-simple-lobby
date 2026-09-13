@@ -1,10 +1,10 @@
 extends Node
 
-const RoomContent := preload("res://game/room_content.gd")
-const RoomOccupant := preload("res://game/room_occupant.gd")
-const RoomPlayerStack := preload("res://game/room_player_stack.gd")
-const RoomProps := preload("res://game/room_props.gd")
-const RoomSpectate := preload("res://game/room_spectate.gd")
+const RoomContent := preload("room_content.gd")
+const RoomOccupant := preload("room_occupant.gd")
+const RoomPlayerStack := preload("room_player_stack.gd")
+const RoomProps := preload("room_props.gd")
+const RoomSpectate := preload("room_spectate.gd")
 
 ## The room: who is in it, where they are, and one deterministic tick.
 ##

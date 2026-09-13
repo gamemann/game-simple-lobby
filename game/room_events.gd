@@ -1,6 +1,6 @@
 extends RefCounted
 
-const RoomContent := preload("res://game/room_content.gd")
+const RoomContent := preload("room_content.gd")
 
 ## The wire format for everything that is not a snapshot or an input.
 ##

@@ -1,7 +1,7 @@
 extends RefCounted
 
-const RoomContent := preload("res://game/room_content.gd")
-const RoomOccupant := preload("res://game/room_occupant.gd")
+const RoomContent := preload("room_content.gd")
+const RoomOccupant := preload("room_occupant.gd")
 
 ## One person in the room.
 ##

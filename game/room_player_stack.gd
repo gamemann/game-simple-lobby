@@ -1,8 +1,8 @@
 extends Node
 
-const RoomContent := preload("res://game/room_content.gd")
-const RoomOccupant := preload("res://game/room_occupant.gd")
-const RoomWorld := preload("res://game/room_world.gd")
+const RoomContent := preload("room_content.gd")
+const RoomOccupant := preload("room_occupant.gd")
+const RoomWorld := preload("room_world.gd")
 
 ## The player-facing addons, stood up once and bound to the lobby.
 ##

@@ -1,7 +1,7 @@
 extends Node
 
-const RoomContent := preload("res://game/room_content.gd")
-const RoomProp := preload("res://game/room_prop.gd")
+const RoomContent := preload("room_content.gd")
+const RoomProp := preload("room_prop.gd")
 
 ## What people have put in the room, on both ends.
 ##

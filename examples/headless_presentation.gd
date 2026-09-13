@@ -1,5 +1,11 @@
 extends Node
 
+const RoomMenus := preload("res://game/client/room_menus.gd")
+const RoomParty := preload("res://game/room_party.gd")
+const RoomPresentation := preload("res://game/client/room_presentation.gd")
+const RoomServices := preload("res://game/room_services.gd")
+const RoomUi := preload("res://game/client/room_ui.gd")
+
 ## The client half that has nothing to do with the room: settings, audio, effects, the
 ## console, and hosting for friends.
 ##

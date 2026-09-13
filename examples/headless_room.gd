@@ -1,5 +1,9 @@
 extends Node
 
+const RoomContent := preload("res://game/room_content.gd")
+const RoomOccupant := preload("res://game/room_occupant.gd")
+const RoomWorld := preload("res://game/room_world.gd")
+
 ## The room's own suite: membership, movement, bounds and determinism.
 ##
 ## [codeblock]

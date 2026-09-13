@@ -1,5 +1,6 @@
-class_name RoomVoice
 extends Node
+
+const RoomServices := preload("res://game/room_services.gd")
 
 ## The client half of voice: a microphone, a codec, a jitter buffer per speaker, and a key.
 ##

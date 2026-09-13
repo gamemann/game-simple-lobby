@@ -1,4 +1,3 @@
-class_name RoomParty
 extends Node
 
 ## Hosting this room for friends, with no dedicated server anywhere.

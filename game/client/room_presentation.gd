@@ -1,5 +1,7 @@
-class_name RoomPresentation
 extends Node
+
+const RoomServices := preload("res://game/room_services.gd")
+const RoomUi := preload("res://game/client/room_ui.gd")
 
 ## The four things that belong to the person sitting in front of the screen.
 ##

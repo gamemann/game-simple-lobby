@@ -1,5 +1,9 @@
 extends Node
 
+const RoomBrowser := preload("res://game/client/room_browser.gd")
+const RoomClient := preload("res://game/client/room_client.gd")
+const RoomContent := preload("res://game/room_content.gd")
+
 ## The launcher: connect to a server, or stand in an empty room offline.
 ##
 ## [codeblock]

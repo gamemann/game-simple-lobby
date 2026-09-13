@@ -1,5 +1,8 @@
 extends Node
 
+const RoomContent := preload("res://game/room_content.gd")
+const RoomModule := preload("res://game/room_module.gd")
+
 ## Packages this room into a signed dot-cloud pack a server can deliver.
 ##
 ## [codeblock]

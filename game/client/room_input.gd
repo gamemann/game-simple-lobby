@@ -1,4 +1,3 @@
-class_name RoomInput
 extends Node
 
 ## Turns a keyboard, a mouse or a finger into one [Dot2DCommand] a tick.

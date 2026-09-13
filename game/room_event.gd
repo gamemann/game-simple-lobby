@@ -1,5 +1,7 @@
-class_name RoomEvent
 extends DotNetMessage
+
+const RoomEvent := preload("res://game/room_event.gd")
+const RoomEvents := preload("res://game/room_events.gd")
 
 ## Everything the authority tells a client that is not a snapshot.
 ##

@@ -1,4 +1,3 @@
-class_name RoomContent
 extends RefCounted
 
 ## Every constant the room is made of, in one file both ends read.

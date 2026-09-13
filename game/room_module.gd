@@ -1,5 +1,10 @@
-class_name RoomModule
 extends DotModule
+
+const RoomBridge := preload("res://game/room_bridge.gd")
+const RoomContent := preload("res://game/room_content.gd")
+const RoomProps := preload("res://game/room_props.gd")
+const RoomServices := preload("res://game/room_services.gd")
+const RoomWorld := preload("res://game/room_world.gd")
 
 ## Binds a [RoomWorld] and its netcode to a [DotServer].
 ##

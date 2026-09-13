@@ -1,5 +1,11 @@
-class_name RoomOffline
 extends Node
+
+const RoomBridge := preload("res://game/room_bridge.gd")
+const RoomContent := preload("res://game/room_content.gd")
+const RoomLink := preload("res://game/room_link.gd")
+const RoomProps := preload("res://game/room_props.gd")
+const RoomServices := preload("res://game/room_services.gd")
+const RoomWorld := preload("res://game/room_world.gd")
 
 ## A server and a client in one tree, with a loopback between them.
 ##

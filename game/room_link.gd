@@ -1,5 +1,7 @@
-class_name RoomLink
 extends Node
+
+const RoomBridge := preload("res://game/room_bridge.gd")
+const RoomLink := preload("res://game/room_link.gd")
 
 ## The four remote calls this game needs, on one node that exists on both ends.
 ##

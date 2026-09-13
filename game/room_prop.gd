@@ -1,5 +1,6 @@
-class_name RoomProp
 extends RigidBody2D
+
+const RoomProps := preload("res://game/room_props.gd")
 
 ## One placed thing in the room, built from its [DotPropDef].
 ##

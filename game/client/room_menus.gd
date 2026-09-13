@@ -1,4 +1,3 @@
-class_name RoomMenus
 extends RefCounted
 
 ## The lobby's escape menu: a pause screen, and dot-ui's settings screen behind it.

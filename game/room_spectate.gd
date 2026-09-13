@@ -1,5 +1,7 @@
-class_name RoomSpectate
 extends Node
+
+const RoomOccupant := preload("res://game/room_occupant.gd")
+const RoomWorld := preload("res://game/room_world.gd")
 
 ## Watching somebody else in the room.
 ##

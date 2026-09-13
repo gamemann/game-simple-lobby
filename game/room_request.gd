@@ -1,5 +1,7 @@
-class_name RoomRequest
 extends DotNetMessage
+
+const RoomEvents := preload("res://game/room_events.gd")
+const RoomRequest := preload("res://game/room_request.gd")
 
 ## Everything a client asks the authority for.
 ##

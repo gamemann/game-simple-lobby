@@ -1,5 +1,11 @@
 extends Node
 
+const RoomClient := preload("res://game/client/room_client.gd")
+const RoomContent := preload("res://game/room_content.gd")
+const RoomModule := preload("res://game/room_module.gd")
+const RoomProps := preload("res://game/room_props.gd")
+const RoomServices := preload("res://game/room_services.gd")
+
 ## A real server and two real clients, over real sockets, in one process.
 ##
 ## [codeblock]

@@ -1,5 +1,9 @@
-class_name RoomRenderer
 extends Node2D
+
+const RoomContent := preload("res://game/room_content.gd")
+const RoomOccupant := preload("res://game/room_occupant.gd")
+const RoomProps := preload("res://game/room_props.gd")
+const RoomWorld := preload("res://game/room_world.gd")
 
 ## Draws the room and everybody in it.
 ##

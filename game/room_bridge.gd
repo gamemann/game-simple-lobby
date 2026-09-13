@@ -1,5 +1,14 @@
-class_name RoomBridge
 extends Node
+
+const RoomEvent := preload("res://game/room_event.gd")
+const RoomEvents := preload("res://game/room_events.gd")
+const RoomLink := preload("res://game/room_link.gd")
+const RoomNetCommand := preload("res://game/room_net_command.gd")
+const RoomOccupant := preload("res://game/room_occupant.gd")
+const RoomOccupantNet := preload("res://game/room_occupant_net.gd")
+const RoomProps := preload("res://game/room_props.gd")
+const RoomRequest := preload("res://game/room_request.gd")
+const RoomWorld := preload("res://game/room_world.gd")
 
 ## Joins a [RoomWorld] to a [DotNetManager], on both ends.
 ##

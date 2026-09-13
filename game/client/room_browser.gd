@@ -1,4 +1,3 @@
-class_name RoomBrowser
 extends Control
 
 ## The server list: what a person sees before they are in a room.

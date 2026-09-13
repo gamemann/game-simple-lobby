@@ -1,5 +1,7 @@
-class_name RoomServices
 extends Node
+
+const RoomBridge := preload("res://game/room_bridge.gd")
+const RoomWorld := preload("res://game/room_world.gd")
 
 ## Chat, moderation and voice, wired to this room's people and this room's wire.
 ##

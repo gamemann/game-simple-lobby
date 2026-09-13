@@ -1,5 +1,8 @@
 extends SceneTree
 
+const RoomMenus := preload("res://game/client/room_menus.gd")
+const RoomPresentation := preload("res://game/client/room_presentation.gd")
+
 ## Renders this game's own screens to `screenshots/` so a person can look at them.
 ##
 ## Separate from `screenshot.gd`, which renders the ROOM. A room wants a camera framing a

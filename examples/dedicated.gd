@@ -1,5 +1,13 @@
 extends Node
 
+const RoomContent := preload("res://game/room_content.gd")
+const RoomLink := preload("res://game/room_link.gd")
+const RoomModule := preload("res://game/room_module.gd")
+const RoomPlatform := preload("res://game/room_platform.gd")
+const RoomProps := preload("res://game/room_props.gd")
+const RoomServices := preload("res://game/room_services.gd")
+const RoomWorld := preload("res://game/room_world.gd")
+
 ## A real [DotServer] with the room loaded into it, listening for browser clients.
 ##
 ## [codeblock]

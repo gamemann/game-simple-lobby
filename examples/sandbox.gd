@@ -236,7 +236,9 @@ func _build_server(server_side: Node) -> bool:
 	if not _check(loaded.ok, "the room loads", str(loaded.error)):
 		return false
 
-	var module := _server.modules.load_module("res://game/room_module.gd")
+	var module: DotResult = await _server.modules.load_module(
+		"res://game/room_module.gd"
+	)
 	return _check(module.ok, "and the module loads into it", str(module.error))
 
 

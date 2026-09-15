@@ -183,6 +183,21 @@ thing: where this person has been, and whatever they type.
 `DotBrowserSourceBackbone` reads a listing website-city does not yet publish; adding it is
 one line the day it does.
 
+**And until now the server half was missing too, which is worse**, because it is the half
+that breaks the source this game *does* have: somebody typing an address in. This room
+answered no query at all — `query_enabled` was never set, no `DotQueryHost` was ever
+attached, and `RoomModule` contributed no provider — so the one path that needs no tracker
+reached a server that could not say what it was. dot-browser's own suite queries a server
+dot-browser built, which is why neither end had noticed.
+
+`RoomQueryProvider` is this game's half, and what it says is what a lobby's row is:
+**the occupancy against the capacity**, and the split between the two sides. A browser
+showing 0/0 for a room with five people waiting in it is a browser nobody uses twice, and
+the side somebody picks here is the one they take into the match they go to, which is this
+game's whole reason for existing. Both numbers come from the thing that owns them —
+`RoomWorld.occupant_count()` and `DotTeamRoster.counts()` — rather than from a tally kept
+beside them.
+
 ## Delivered, not shipped — and the one thing that stops it
 
 `tools/publish_room.tscn` packages `game/` and `scenes/` into a signed dot-cloud pack:
@@ -377,7 +392,7 @@ tools/check.sh                # all four, after a parse pass
 | --- | --- | --- |
 | `headless_room` | 45 | the room alone. Membership, walls, and two worlds replaying the same commands bit-identically |
 | `headless_stack` | 23 | the player layer: the collision layout, the two sides, the class as a choice nothing applies, and the ring of seats |
-| `headless_presentation` | 66 | settings, audio, effects, the console and the party — **none of which `headless_room` can reach**, because that one is `RoomWorld` alone and has no client in it |
+| `headless_presentation` | 70 | settings, audio, effects, the console and the party — **none of which `headless_room` can reach**, because that one is `RoomWorld` alone and has no client in it |
 | `headless_net` | 65 | every encoder against its decoder, then a session over a lossy delaying loopback, then a walk into the furniture |
 | `dedicated` | 81 | a real `DotServer`, a real module, a real WebSocket listener, and the props, chat, voice, moderation and identity halves |
 | `sandbox` | 62 | **a real server and two real clients, over real sockets, in one process** — chat, props and voice all cross a wire here and nowhere else |
@@ -499,7 +514,9 @@ This client had a console and no menu at all. Escape put the prop palette down a
 
 **The stack does not own the mouse.** `DotScreenStack.manage_mouse` forces CAPTURED whenever nothing is open, which is right for a first-person game and wrong for this one: the lobby is played with a visible cursor — a click places a prop — so a stack that recaptured on every close would take away the only control scheme this game has.
 
-**The settings screen is dot-ui's, not this game's own.** Four clients in the family had written the same panel-title-buttons shape, and two copies of one thing is this tree's most repeated mistake. What is this game's own is which document it hands over, and that is one line.
+**Both screens are dot-ui's, and one of them was a copy for longer than it should have been.** Four clients in the family had written the same panel-title-buttons shape, and two copies of one thing is this tree's most repeated mistake. `DotSettingsScreen` was adopted the day it existed; `DotPauseScreen` was not, so this file went on holding the forty lines the addon exists to hold once — while dot-ui's own notes said four clients had stopped writing them. Three of the four had not. What is this game's own is which words are on the buttons and what happens when one is pressed, and that is what `RoomMenus` is now.
+
+**The button ids are derived from the labels, never paired with them.** `DotPauseScreen.id_for("Leave")` is `&"leave"`; a list of labels and a parallel list of ids is two lists that can disagree. Resume and Settings are wired inside `install` because both are about the stack and nothing else; **Leave is not**, because what leaving means is the client's, which is the next paragraph.
 
 **And the check that matters is not that it draws.** `DotSettingsManager.to_config()` hands out a *snapshot*, so a screen that called only the panel's apply would report success and change nothing. Every structural check passes either way — it builds, it has a size, it has focus. `headless_presentation` edits a value, presses Apply, and then reads the **manager** and the mixer.
 

@@ -220,12 +220,81 @@ func _module_load() -> DotResult:
 			"room": world.tick_rate,
 		})
 
+	_build_query_provider()
+
 	log_info("the room is open", {
 		"bounds": world.arena.bounds,
 		"capacity": RoomContent.MAX_OCCUPANTS,
 	})
 
 	return DotResult.success(null)
+
+
+## What a server browser is told about this room.
+##
+## [b]This game ships `RoomBrowser` and answered no query at all.[/b] A lobby is the one
+## server in this family a person is most likely to be *choosing* from a list — it is where
+## people wait for each other — and until now it could not be found by the browser it ships
+## with. dot-server answers A2S and DQP once a query host is plugged in, and what a listing
+## row says about the GAME comes from a provider like this one.
+##
+## **The occupancy is the row.** A lobby's whole state is how many people are in it against
+## how many it holds, and a browser showing 0/0 for a room with five people waiting in it
+## is a browser nobody would use twice.
+func _build_query_provider() -> void:
+	var provider := RoomQueryProvider.new()
+	provider.module = self
+
+	# DEBUG rather than ERROR: a room with neither query protocol enabled is a legitimate
+	# deployment — a peer-to-peer lobby has no listener to answer on at all.
+	DotLog.result(
+		CHANNEL, "the query provider", add_query_provider(provider), DotLog.Level.DEBUG
+	)
+
+
+## A [DotQueryProvider] over this module. An inner class because it is one method and a
+## reference, which is what game-arena does for the same thing.
+class RoomQueryProvider extends DotQueryProvider:
+	## Held as an [Object]: this script has no [code]class_name[/code] and an inner class
+	## cannot name the outer script it lives in.
+	var module: Object = null
+
+	func _provider_name() -> String:
+		return "room"
+
+	func _contribute(snapshot: DotQuerySnapshot) -> void:
+		if module == null or module.world == null:
+			return
+
+		var world: RoomWorld = module.world
+		var values := {
+			# A lobby has one room and it is always this one, so the map is a constant
+			# rather than a lookup. Said rather than omitted: a listing column that is
+			# blank reads as a server that failed to answer.
+			"map": "the room",
+			"occupants": world.occupant_count(),
+			"capacity": RoomContent.MAX_OCCUPANTS,
+			"props": module.props.count() if module.props != null else 0,
+			"tick_rate": world.tick_rate,
+		}
+
+		# The side somebody picks here is the one they take into the match they go to,
+		# which is this game's whole reason for existing — so the split is worth a row.
+		# `counts()` rather than a loop over the definitions: the roster already builds
+		# exactly this dictionary, and a second tally is a second thing that can disagree.
+		if world.player_stack != null and world.player_stack.teams != null:
+			# Hoisted: `counts()` builds a fresh dictionary on every call, and
+			# `count_on` is a call to it per side.
+			var counts := world.player_stack.teams.counts()
+			var sides := PackedStringArray()
+
+			for id: StringName in counts:
+				sides.append("%s:%d" % [String(id), int(counts[id])])
+
+			values["sides"] = " ".join(Array(sides))
+
+		for key: String in values:
+			snapshot.game[key] = values[key]
 
 
 func _module_unload() -> void:

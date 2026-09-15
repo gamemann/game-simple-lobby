@@ -411,6 +411,30 @@ func _test_escape_menu() -> void:
 		"and the focus path resolves, which `button.get_path()` before the tree does not"
 	)
 
+	# [b]dot-ui's screen, not a copy of it.[/b] This game carried its own forty lines of
+	# pause menu for as long as `DotPauseScreen` has existed -- the settings screen was
+	# moved when that addon grew one and the pause screen was not, so the file that says
+	# four clients stopped writing these was wrong about three of them.
+	_check(pause is DotPauseScreen, "the pause screen is the shared one")
+	# Ids derived from labels rather than paired with them, which is what stops the two
+	# lists disagreeing. The client matches on LEAVE and nothing restates the string.
+	_check(
+		pause.ids() == ([&"resume", &"settings", RoomMenus.LEAVE] as Array[StringName]),
+		"and its ids come from its labels (%s)" % [pause.ids()]
+	)
+	_check(
+		pause.button(RoomMenus.LEAVE) != null and not pause.button(RoomMenus.LEAVE).disabled,
+		"Leave is there and live"
+	)
+
+	var chosen: Array[StringName] = []
+	pause.chosen.connect(func(id: StringName) -> void: chosen.append(id))
+	pause.button(RoomMenus.LEAVE).pressed.emit()
+	_check(
+		chosen == ([RoomMenus.LEAVE] as Array[StringName]),
+		"and pressing it says which button it was, rather than a signal per button"
+	)
+
 	# Settings replaces nothing: a player who opens it and presses Back is back at the
 	# pause menu, not in the game.
 	stack.push(&"settings")

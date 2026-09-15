@@ -26,6 +26,12 @@ const RoomWorld := preload("../game/room_world.gd")
 ## It does not connect a client: `examples/sandbox.tscn` does that, over a real socket.
 
 const PORT := 27085
+
+## The app's URL segment on the website, which is this game's code name.
+##
+## Display only — a listing prints it to say which game this is, and nothing treats it as
+## proof.
+const APP_URL := "lobby"
 const SERVER_DIR := "user://room_dedicated"
 
 var _passed := 0
@@ -71,6 +77,7 @@ func _run() -> void:
 		_test_joining()
 		_test_props()
 		_test_services()
+		_test_query()
 		_test_identity()
 		_test_transport()
 		_test_unload()
@@ -92,6 +99,45 @@ func _run() -> void:
 		print("  FAIL  %s" % line)
 
 	get_tree().quit(1 if _failed > 0 else 0)
+
+
+## The server half of this game's own server browser.
+##
+## [b]`RoomBrowser` has existed for as long as this client has, and nothing in this
+## repository could answer it.[/b] A lobby's listing row is its occupancy and the split
+## between the two sides — how many people are waiting and which way they are leaning —
+## and both were unreachable from outside the process.
+func _test_query() -> void:
+	_section("the server browser's half")
+
+	var module := _module()
+
+	if module == null:
+		_check(false, "the module is loaded")
+		_done()
+		return
+
+	_check(_server.query_source != null, "the server has a query source to contribute to")
+
+	var snapshot := DotQuerySnapshot.new()
+
+	for provider in module._query_providers:
+		provider.call("_contribute", snapshot)
+
+	_check(snapshot.game.has("map"), "the query names the room")
+	_check(
+		int(snapshot.game.get("occupants", -1)) == _world().occupant_count(),
+		"the occupancy is the world's own count rather than a second tally",
+		str(snapshot.game.get("occupants", -1))
+	)
+	_check(
+		int(snapshot.game.get("capacity", 0)) == RoomContent.MAX_OCCUPANTS,
+		"and it says what the room holds, so a full one reads as full"
+	)
+	# The side picked here is the one taken into the match, which is what this game is for.
+	_check(snapshot.game.has("sides"), "and how the two sides are split")
+
+	_done()
 
 
 func _section(title: String) -> void:
@@ -161,6 +207,11 @@ func _build(serving: bool) -> bool:
 	# correct layering and would make this test assert against whatever that file says.
 	config.startup_config = ""
 	config.autoexec_config = ""
+	# The query listeners. A lobby is the server in this family a person is most likely to
+	# be choosing off a list, and this game has shipped `RoomBrowser` against a server that
+	# answered nothing at all.
+	config.query_enabled = true
+	config.query_port = PORT + 1
 
 	_server = DotServer.new()
 	_server.name = "Server"
@@ -168,6 +219,14 @@ func _build(serving: bool) -> bool:
 	_server.config_file = ""
 	_server.auto_boot = false
 	add_child(_server)
+
+	# Answering a query is its own addon, and a server only answers if a host is plugged
+	# in. Added before boot() so the listener opens with everything else.
+	var query_host := DotQueryHost.new()
+	query_host.name = "QueryHost"
+	query_host.app_url = APP_URL
+	query_host.server_ref = DotNodeRef.of_path(NodePath("../Server"))
+	add_child(query_host)
 
 	var booted: DotResult = await _server.boot()
 
@@ -195,14 +254,16 @@ func _build(serving: bool) -> bool:
 	if not _check(identity.ok, "profiles and avatars are up", str(identity.error)):
 		return false
 
-	var platform := _server.modules.load_module(
+	var platform: DotResult = await _server.modules.load_module(
 		"res://addons/dot_platform/dot_platform_module.gd"
 	)
 
 	if not _check(platform.ok, "the platform module loads", str(platform.error)):
 		return false
 
-	var module := _server.modules.load_module("res://game/room_module.gd")
+	var module: DotResult = await _server.modules.load_module(
+		"res://game/room_module.gd"
+	)
 	return _check(module.ok, "and the module loads into it", str(module.error))
 
 
@@ -666,7 +727,7 @@ func _test_unload() -> void:
 		"a handler left behind points at a freed object and the console calls it"
 	)
 	_check(
-		_server.modules.load_module("res://game/room_module.gd").ok,
+		(await _server.modules.load_module("res://game/room_module.gd")).ok,
 		"and loads again cleanly"
 	)
 	_done()

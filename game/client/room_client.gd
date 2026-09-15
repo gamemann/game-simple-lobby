@@ -517,7 +517,16 @@ func _build_menus(layer: CanvasLayer) -> void:
 	)
 	var pause := RoomMenus.install(menus, settings)
 
-	pause.leave_pressed.connect(func() -> void:
+	if pause == null:
+		return
+
+	# Resume and Settings are wired inside `install` because both are about the stack and
+	# nothing else. Leaving is this client's: an embedded one cannot leave and a
+	# single-process test must not, so what the button means is decided here.
+	pause.chosen.connect(func(id: StringName) -> void:
+		if id != RoomMenus.LEAVE:
+			return
+
 		# Closing the menu first, so a client that cannot actually leave -- an embedded
 		# one, a single-process test -- is not left staring at a pause screen over a game
 		# that carried on running behind it.

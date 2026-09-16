@@ -21,7 +21,7 @@ const RoomUi := preload("../game/client/room_ui.gd")
 ##
 ## Exits non-zero on any failure.
 
-const CHECKS := 66
+const CHECKS := 70
 
 var _passed := 0
 var _failed := 0

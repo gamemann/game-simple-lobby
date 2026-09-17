@@ -611,12 +611,4 @@ The server still tells its clients what is carrying chat — `RoomServices` poin
   between this and being genuinely delivered rather than shipped.
 - **A Host button.** A browser tab cannot listen, and offering a control that fails on the
   platform this game exists for is worse than not offering it.
-- **Any actual audio files.** The catalogue is written and there are still no files behind
-  it. That is the right way round — what this game was missing was never the files but the
-  decision about what is audible, how many at once and how loud, which is a document and is
-  `RoomPresentation.sound_catalogue()`. It is not silent any more: `sound_recipes()` gives
-  each of the five ids a `DotAudioSynth` voice and the sink falls through to it when a path
-  resolves to nothing. Everything a lobby makes a noise about is somebody *else* doing
-  something, so all five are short and quiet by design — a room you sit in for twenty
-  minutes is the one place in this family where an over-eager sound is something people
-  mute the tab for. Dropping five `.ogg` files into `audio/` changes nothing else.
+- **Any actual audio files.** The catalogue is written and there are still no files behind it. That is the right way round — what this game was missing was never the files but the decision about what is audible, how many at once and how loud, which is a document and is `RoomPresentation.sound_catalogue()`. It is not silent any more: `sound_recipes()` gives each of the five ids a `DotAudioSynth` voice and the sink falls through to it when a path resolves to nothing. Everything a lobby makes a noise about is somebody *else* doing something, so all five are short and quiet by design — a room you sit in for twenty minutes is the one place in this family where an over-eager sound is something people mute the tab for. Dropping five `.ogg` files into `audio/` changes nothing else.

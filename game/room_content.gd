@@ -146,19 +146,31 @@ static func furniture() -> PackedVector3Array:
 		# hairline gap between two tangent circles for a walker to be squeezed
 		# through by the resolve. The pair either side of the middle are the door
 		# posts and the DOORWAY_SPAN between them is the only way across.
-		Vector3(WALL_X, -460.0, POST_RADIUS),
+		# The north end of the partition stops NORTH_GATE_Y short of the north wall,
+		# and the gap is the second way through. See NORTH_GATE_Y.
+		Vector3(WALL_X, NORTH_GATE_Y, POST_RADIUS),
 		Vector3(WALL_X, -300.0, POST_RADIUS),
 		Vector3(WALL_X, -140.0, POST_RADIUS),
 		Vector3(WALL_X, 140.0, POST_RADIUS),
 		Vector3(WALL_X, 300.0, POST_RADIUS),
 		Vector3(WALL_X, 460.0, POST_RADIUS),
 
-		# The wing itself: two round tables at either end and a bench against the
-		# west wall, so the middle of it stays clear and the doorway opens onto
-		# somewhere to walk rather than onto a table.
-		Vector3(-770.0, -330.0, 55.0),
-		Vector3(-770.0, 330.0, 55.0),
-		Vector3(-830.0, 0.0, 45.0),
+		# The wing itself: a counter down its west wall — a table at either end and
+		# a bench between them — so the middle of it stays clear and the doorway
+		# opens onto somewhere to walk rather than onto a table.
+		#
+		# [b]All three are pinned to the west wall by WING_PIECE_X, and that is not
+		# decoration.[/b] The wing is a strip DOORWAY-wide with a walker's usable
+		# band narrower still, so a piece of furniture standing in the middle of it
+		# does not make the room interesting, it closes the room — which is what the
+		# two r=55 tables at x=-770 did from the day the wing was built until
+		# 2026-09-17. They left a 31-unit squeeze against the west wall and a walker
+		# holding north jammed against the partition at y=-266, in a room whose
+		# renderer, roster and resolve were all perfectly happy. Nothing walked the
+		# wing's length until something did.
+		Vector3(WING_PIECE_X, -330.0, WING_PIECE_RADIUS),
+		Vector3(WING_PIECE_X, 330.0, WING_PIECE_RADIUS),
+		Vector3(WING_PIECE_X, 0.0, WING_PIECE_RADIUS),
 	])
 
 
@@ -179,6 +191,39 @@ const POST_RADIUS := 90.0
 ## walk through without aiming — which is the difference between a second room and a
 ## second room nobody goes into.
 const DOORWAY_SPAN := 280.0 - POST_RADIUS * 2.0
+
+
+## The centre of the partition's northernmost post.
+##
+## [b]Derived so that the gap it leaves against the north wall is exactly
+## [constant DOORWAY_SPAN].[/b] The north gate is the front door's width because it is
+## a door, not a squeeze: a second way through that has to be aimed at is a second way
+## through nobody finds, and the value of it is precisely that the wing stops being a
+## pocket you have to back out of. One person standing in one doorway was a locked
+## room, and a lobby is the one place people do stand in doorways.
+##
+## Written as an expression rather than as -370 so that moving the room's north wall,
+## or widening the door, moves the gate with them.
+const NORTH_GATE_Y := -ROOM_EXTENT.y + DOORWAY_SPAN + POST_RADIUS
+
+
+## How far the wing's furniture stands from the room's west wall.
+##
+## [b]Against it, so a lane runs the wing's whole length on its east side.[/b] The
+## partition's posts take [constant POST_RADIUS] off the wing's east edge and a walker's
+## own radius takes another, which leaves about 146 units of usable band — less than the
+## diameter of a table plus two walkers. There is no arrangement in which furniture
+## stands in the middle of this wing and the wing is still a room.
+const WING_PIECE_X := -862.0
+
+## How big a piece of the wing's counter is.
+##
+## Sized against the lane it has to leave rather than against how a table looks: at this
+## radius a walker clears the counter from x = -804 eastward and the partition from
+## x = -732 westward, so the lane is 72 units wide — wider than the window a walker has
+## through the doorway, which is the width this room has already agreed is walkable
+## without aiming.
+const WING_PIECE_RADIUS := 36.0
 
 
 ## Whether [param at] is in the wing behind the partition rather than in the hall.

@@ -13,7 +13,7 @@ const RoomWorld := preload("../game/room_world.gd")
 ## Exits non-zero on any failure. No netcode, no server, no rendering — this is
 ## [RoomWorld] alone, which is the only part of the game that decides anything.
 
-const CHECKS := 45
+const CHECKS := 48
 
 var _passed := 0
 var _failed := 0
@@ -398,6 +398,57 @@ func _test_wing() -> void:
 			standing += 1
 
 	_check(standing >= 3, "and something to stand behind when you get there (%d)" % standing)
+
+	# --- The wing's LENGTH, which is a different question from its door ------
+	#
+	# [b]Every check above walks ACROSS the wing and none of them walks ALONG it.[/b]
+	# The wing is a strip 280 units wide with a walker's usable band narrower still —
+	# the partition's posts eat 90 of it and the west wall another 22 — so a single
+	# piece of furniture in the middle of it closes the whole room off, and the
+	# renderer, the roster and the resolve are all perfectly happy with that. Walking
+	# the door proves the door.
+	var walker := world.occupant_for(1)
+	walker.state.position = Vector2(-750.0, 0.0)
+	walker.state.velocity = Vector2.ZERO
+
+	for _i in range(600):
+		world.tick({1: _walk(Vector2.UP)})
+
+	var north := walker.position()
+	_check(
+		RoomContent.in_wing(north) and north.y < -420.0,
+		"the wing can be walked from its middle to its north end (%.0f, %.0f)"
+			% [north.x, north.y],
+		"one piece of furniture in a 280-wide strip closes it, and nothing else notices"
+	)
+
+	# And out the other end. The partition has two ways through it, so the wing is a
+	# circuit rather than a pocket you have to back out of — which is what stops one
+	# person standing in a doorway from being a locked door.
+	for _i in range(400):
+		world.tick({1: _walk(Vector2.RIGHT)})
+
+	var out := walker.position()
+	_check(
+		not RoomContent.in_wing(out) and out.y < -420.0,
+		"and left by the north gate rather than by the door it came in (%.0f, %.0f)"
+			% [out.x, out.y]
+	)
+
+	# South, the whole way, from the same start. A lane that exists only north of the
+	# doorway is half a room.
+	walker.state.position = Vector2(-750.0, 0.0)
+	walker.state.velocity = Vector2.ZERO
+
+	for _i in range(600):
+		world.tick({1: _walk(Vector2.DOWN)})
+
+	var south := walker.position()
+	_check(
+		RoomContent.in_wing(south) and south.y > 420.0,
+		"and from its middle to its south end (%.0f, %.0f)" % [south.x, south.y],
+		"the south end is a dead end by design, but it has to be reachable"
+	)
 	_done()
 
 

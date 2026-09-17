@@ -243,9 +243,25 @@ The room was one space, and one space is one conversation. dot-chat gives a chan
 
 Six posts on `RoomContent.WALL_X`, overlapping by twenty units each rather than merely touching — two tangent circles leave a contact point the resolve can push a walker straight through, because each circle on its own is happy to send them toward the other. The pair either side of the middle are the door posts and `DOORWAY_SPAN` between them is the only way across; it is wide enough to walk through without aiming, because a door that has to be aimed at is a door nobody uses.
 
-**The wing behind it has its own furniture** — two round tables and a bench against the west wall — with the middle left clear, so the doorway opens onto somewhere to walk rather than onto a table.
+**The wing behind it has its own furniture** — a counter down its west wall, a table at either end and a bench between them — with the lane beside it left clear, so the doorway opens onto somewhere to walk rather than onto a table.
 
 `headless_room`'s **the wing behind the partition** section is what says any of that is true. A list of circles is happy to be a wall with a hole in it or a wall with no way through at all, and both of those are the same list with different numbers in it, so the section walks it: into a post and blocked, through the doorway and into the wing, and back out again. `RoomContent.in_wing` is read from the same constant the posts are placed from, because a check that wrote the number again would keep passing after the wall moved.
+
+#### Walking ACROSS a room is not walking ALONG it, and nothing had done the second
+
+The wing shipped on 2026-09-12 with two round tables of radius 55 standing at x = -770, in the middle of a strip 280 units wide. **It was not a room. It was a corridor with a cork in each end**, and a walker holding north from the doorway jammed against the partition at y = -266 and stayed there for the remaining 550 ticks.
+
+The arithmetic is the whole lesson. The partition's posts eat `POST_RADIUS` off the wing's east edge and a walker's own radius eats another, which leaves about 146 units of usable band — **less than one table's diameter plus two walkers**. There is no arrangement in which a table of that size stands in the middle of this wing and the wing is still passable; the geometry had already decided, and the only thing that had not noticed was that nothing ever asked.
+
+Everything else was green the entire time. The renderer drew it, the roster listed it, the resolve pushed people out of it correctly, the determinism section replayed it bit-identically, and `in_wing` answered honestly about a room nobody could reach the ends of. **The three checks in this section all walked across the wing, through its door, and back out the same door** — which proves a door, and proves nothing at all about a room.
+
+Fixed by pinning all three pieces to the west wall (`WING_PIECE_X`) and sizing them against the lane they have to leave rather than against how a table looks (`WING_PIECE_RADIUS`, which leaves 72 units — wider than the window a walker has through the doorway, which is the width this room has already agreed is walkable without aiming). The section now walks the wing's length in both directions, and would fail again the moment anybody puts something back in the middle of it.
+
+#### The north gate: a second way through, so one person in a doorway is not a locked door
+
+The partition's northernmost post is at `NORTH_GATE_Y`, which is **derived** so that the gap it leaves against the north wall is exactly `DOORWAY_SPAN` — the front door's width, from the front door's constant, so widening one widens both and moving the room's north wall moves the gate with it. Written as -370 it would be a number that keeps its value after the thing it was measured from has moved.
+
+The wing is a circuit now rather than a pocket: in through the middle door, up the lane, out at the north. That matters here more than it would in a shooter, because **a lobby is the one place people genuinely do stand in doorways** — it is a room whose entire activity is standing about talking — and a second room with one door and somebody parked in it is a room you cannot leave. `headless_room` drives a walker the length of the wing and out the gate, so the gate is a route rather than a gap in a list.
 
 **The spawn is resolved too.** `Dot2DArena.spawn_position` knows the room's rectangle and
 nothing about what is standing in it, so a share of its answers are inside something. A
@@ -390,11 +406,11 @@ tools/check.sh                # all four, after a parse pass
 
 | | | |
 | --- | --- | --- |
-| `headless_room` | 45 | the room alone. Membership, walls, and two worlds replaying the same commands bit-identically |
+| `headless_room` | 48 | the room alone. Membership, walls, and two worlds replaying the same commands bit-identically |
 | `headless_stack` | 23 | the player layer: the collision layout, the two sides, the class as a choice nothing applies, and the ring of seats |
 | `headless_presentation` | 70 | settings, audio, effects, the console and the party — **none of which `headless_room` can reach**, because that one is `RoomWorld` alone and has no client in it |
 | `headless_net` | 65 | every encoder against its decoder, then a session over a lossy delaying loopback, then a walk into the furniture |
-| `dedicated` | 81 | a real `DotServer`, a real module, a real WebSocket listener, and the props, chat, voice, moderation and identity halves |
+| `dedicated` | 86 | a real `DotServer`, a real module, a real WebSocket listener, and the props, chat, voice, moderation and identity halves |
 | `sandbox` | 62 | **a real server and two real clients, over real sockets, in one process** — chat, props and voice all cross a wire here and nowhere else |
 
 **`sandbox` is the one that matters and the slowest to write.** It is the only place

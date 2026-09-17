@@ -21,7 +21,7 @@ const RoomUi := preload("../game/client/room_ui.gd")
 ##
 ## Exits non-zero on any failure.
 
-const CHECKS := 70
+const CHECKS := 74
 
 var _passed := 0
 var _failed := 0
@@ -49,6 +49,8 @@ func _run() -> void:
 	_test_party()
 	_test_chat_key()
 	await _test_escape_menu()
+
+	_test_every_sound_has_a_voice()
 
 	print("")
 	_check(
@@ -470,6 +472,52 @@ func _test_escape_menu() -> void:
 	stack.clear()
 	stack.queue_free()
 	p.queue_free()
+	_done()
+
+
+func _test_every_sound_has_a_voice() -> void:
+	# This game shipped a complete catalogue pointing at files nobody has produced, and
+	# was therefore silent while every check about its audio passed. The two directions
+	# below are the ones that go wrong without erroring: an id with no recipe is one sound
+	# that stays silent for ever, and a recipe naming an id the catalogue does not have is
+	# a decision that reaches nothing. Neither is visible from any assertion about the
+	# catalogue on its own -- and a headless run cannot hear the result, so this is as
+	# close as an assertion gets. game-arena/tools/audio_probe.sh is the other half.
+	_section("Every sound this game declares has a noise to make")
+
+	var cat := RoomPresentation.sound_catalogue()
+	var recipes := RoomPresentation.sound_recipes()
+
+	var uncovered: Array[String] = []
+	for id in cat.ids():
+		if not recipes.has(id):
+			uncovered.append(String(id))
+	_check(
+		uncovered.is_empty(),
+		"every id in the catalogue has a stand-in voice",
+		"silent for ever: %s" % str(uncovered)
+	)
+
+	var stray: Array[String] = []
+	for id in recipes.keys():
+		if cat.find(StringName(id)) == null:
+			stray.append(String(id))
+	_check(stray.is_empty(), "and no recipe names an id that is not there", str(stray))
+
+	var bank := DotAudioSynth.bank(cat, recipes)
+	_check(
+		bank.has(&"chat_message") and bank.has("res://audio/message.ogg"),
+		"the bank answers under both the id and the path the def names"
+	)
+	_check(
+		(
+			(bank[&"chat_message"] as AudioStreamWAV).data
+			!= (bank[&"chat_whisper"] as AudioStreamWAV).data
+		),
+		"and chat_message does not sound like chat_whisper",
+		"a line addressed to you arriving in the same blip as the room's traffic is a line you will miss"
+	)
+
 	_done()
 
 

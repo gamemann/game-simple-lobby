@@ -251,6 +251,26 @@ static func sound_catalogue() -> DotAudioCatalogue:
 	return c
 
 
+## Which synthesised voice stands in for each id until real audio is dropped into
+## [constant SOUND_DIR].
+##
+## [b]Everything a lobby makes a noise about is somebody else doing something.[/b] Nothing
+## here is a consequence of your own input, so every one of these is short and quiet by
+## design — a room you sit in for twenty minutes is the one place in this family where an
+## over-eager sound becomes something people mute the tab for.
+##
+## `chat_message` and `chat_whisper` are deliberately different: a line addressed to you
+## arriving in the same blip as the room's traffic is a line you will miss.
+static func sound_recipes() -> Dictionary:
+	return {
+		&"join": DotAudioSynth.Voice.SPAWN,
+		&"leave": DotAudioSynth.Voice.DENY,
+		&"chat_message": DotAudioSynth.Voice.BLIP,
+		&"chat_whisper": DotAudioSynth.Voice.CLICK,
+		&"prop_placed": DotAudioSynth.Voice.IMPACT,
+	}
+
+
 func _build_audio() -> DotResult:
 	audio = DotAudioManager.new()
 	audio.name = "Audio"
@@ -264,6 +284,20 @@ func _build_audio() -> DotResult:
 	var res := audio.setup()
 	if not res.ok:
 		return res.wrap("the lobby's audio")
+
+	# Only on a real sink, and only after setup: the manager decides whether there is a
+	# device, and on a headless server there is nothing to bake for. Building the bank
+	# anyway would be arithmetic per dedicated-server startup for streams no process on
+	# that machine can play.
+	var godot_sink := audio.sink as DotAudioSinkGodot
+	if godot_sink != null:
+		godot_sink.bank = DotAudioSynth.bank(audio.catalogue, sound_recipes())
+		DotLog.info(
+			CHANNEL,
+			"no audio files; synthesised stand-ins are in use",
+			{"ids": sound_recipes().size(), "dir": SOUND_DIR}
+		)
+
 	return DotResult.success(null)
 
 

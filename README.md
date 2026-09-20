@@ -77,3 +77,7 @@ done
 ```
 
 The links are gitignored: a shipped build copies the addon folders in instead.
+
+## Licence
+
+MIT. See [LICENSE](LICENSE).

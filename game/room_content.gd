@@ -118,7 +118,7 @@ const FLOOR_GRID := 80.0
 ## them is a thing to stand behind, and a lobby where everybody stands in one place is a
 ## lobby where the roster is the only thing anybody reads.
 static func furniture() -> PackedVector3Array:
-	return PackedVector3Array([
+	var out := PackedVector3Array([
 		# The island. Big enough to walk round and small enough to see over.
 		Vector3(0.0, 0.0, 150.0),
 
@@ -173,6 +173,14 @@ static func furniture() -> PackedVector3Array:
 		Vector3(WING_PIECE_X, 0.0, WING_PIECE_RADIUS),
 	])
 
+	# --- The gallery along the north wall ------------------------------------
+	#
+	# A screen standing off the north wall, centred on the room, with the two north
+	# pillars as its doorposts. See [constant GALLERY_DEPTH].
+	out.append_array(gallery_screen())
+
+	return out
+
 
 ## Where the partition stands. West of the north-west and south-west pillars.
 const WALL_X := -620.0
@@ -224,6 +232,96 @@ const WING_PIECE_X := -862.0
 ## through the doorway, which is the width this room has already agreed is walkable
 ## without aiming.
 const WING_PIECE_RADIUS := 36.0
+
+
+# --- The gallery -----------------------------------------------------------
+
+## How deep the strip behind the north screen is, from the wall to the screen's face.
+##
+## [b]Derived from what has to fit in it rather than from how it looks.[/b] The wing was
+## built to a width that looked right and was then furnished until nobody could walk
+## down it, and nothing in this project noticed for as long as that was true. Four
+## occupant diameters is two people stopped against the north wall talking and two more
+## getting past them, which is the only thing this strip has to be able to do — and it
+## is the reason the gallery is left EMPTY. There is nothing in it to stand behind
+## because the gallery itself is the thing you stand behind.
+const GALLERY_DEPTH := OCCUPANT_RADIUS * 8.0
+
+## The radius of one screen post.
+##
+## [b]Thinner than a partition post, and it is the hall that decides so.[/b] The room's
+## north half is 410 units from the island's edge to the wall, and the screen has to fit
+## its own thickness, the gallery behind it and the hall's north lane into that. At the
+## partition's radius of 90 the lane came out at 94 units — a walker's window of 50, in
+## the main room, which is the wing's own bug moved into the hall. At 50 the lane is 136
+## and the gallery is still four occupant diameters deep. A screen is not load-bearing;
+## the partition is a wall and this is furniture.
+const GALLERY_POST_RADIUS := 50.0
+
+## How much neighbouring screen posts overlap, in units.
+##
+## The partition's number, for the partition's reason: two circles that merely touch
+## leave a contact point [method resolve_circles] can push a walker straight through,
+## because each circle on its own is happy to send them toward the other.
+const GALLERY_OVERLAP := 20.0
+
+## How many posts the screen is made of.
+##
+## [b]Six, and the count is bounded by the pillars rather than by the wall.[/b] The
+## screen must stop well short of the north-west and north-east pillars but not far
+## short: a post 167 units from a pillar centre leaves 52 between their faces and 8 for a
+## walker, which is a slot nothing can pass and reads in a picture as a way through,
+## while a screen that stops 300 short has mouths so wide the gallery is not a room. At
+## six the ends stand 265 from the pillar beside them, which leaves 169 — more than the
+## front door and less than a third of the hall. The pillars are the gallery's doorposts,
+## which is why the mouths are where they are.
+const GALLERY_POSTS := 6
+
+## Where the screen stands.
+##
+## Derived so the walkable strip behind it is exactly [constant GALLERY_DEPTH], the same
+## way [constant NORTH_GATE_Y] derives the north gate: move the north wall and the screen
+## moves with it rather than the gallery quietly becoming a corridor.
+const GALLERY_Y := -ROOM_EXTENT.y + GALLERY_DEPTH + GALLERY_POST_RADIUS
+
+
+## How far apart the screen's posts stand, centre to centre.
+static func gallery_spacing() -> float:
+	return GALLERY_POST_RADIUS * 2.0 - GALLERY_OVERLAP
+
+
+## The screen's posts, on their own.
+##
+## [b]Separate from [method furniture] so a check can ask about the screen rather than
+## about whatever happens to be standing near it.[/b] The first version of the gallery's
+## section asked [method in_gallery] which pieces were the screen, and the answer was
+## none of them: a post's centre sits exactly ON [constant GALLERY_Y] and that predicate
+## is a strict `<`, so the mouth measurement compared an empty set against an empty set
+## and reported `inf` as a pass. Two questions — "is this point in the strip" and "is
+## this circle part of the screen" — and one of them is not a position test at all.
+static func gallery_screen() -> PackedVector3Array:
+	var out := PackedVector3Array()
+
+	for index in range(GALLERY_POSTS):
+		out.append(Vector3(
+			(float(index) - float(GALLERY_POSTS - 1) * 0.5) * gallery_spacing(),
+			GALLERY_Y,
+			GALLERY_POST_RADIUS
+		))
+
+	return out
+
+
+## Whether [param at] is in the gallery behind the north screen rather than in the hall.
+##
+## [b]Read from the same constants the posts are placed from[/b], for the reason
+## [method in_wing] gives: a check that wrote -314 again would keep passing after the
+## wall moved. The x bound is the screen's own extent, so a point level with the gallery
+## but out past either mouth is in the hall, which is what a person standing there would
+## say.
+static func in_gallery(at: Vector2) -> bool:
+	var half := float(GALLERY_POSTS - 1) * 0.5 * gallery_spacing() + GALLERY_POST_RADIUS
+	return at.y < GALLERY_Y and absf(at.x) <= half
 
 
 ## Whether [param at] is in the wing behind the partition rather than in the hall.

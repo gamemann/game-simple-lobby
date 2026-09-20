@@ -13,7 +13,7 @@ const RoomWorld := preload("../game/room_world.gd")
 ## Exits non-zero on any failure. No netcode, no server, no rendering — this is
 ## [RoomWorld] alone, which is the only part of the game that decides anything.
 
-const CHECKS := 48
+const CHECKS := 56
 
 var _passed := 0
 var _failed := 0
@@ -46,6 +46,7 @@ func _run() -> void:
 	_test_walking()
 	_test_bounds()
 	_test_wing()
+	_test_gallery()
 	_test_determinism()
 	_test_bubbles()
 	_test_spectating()
@@ -449,6 +450,140 @@ func _test_wing() -> void:
 		"and from its middle to its south end (%.0f, %.0f)" % [south.x, south.y],
 		"the south end is a dead end by design, but it has to be reachable"
 	)
+	_done()
+
+
+## The gallery along the north wall: walked end to end, and out the far mouth.
+##
+## [b]The wing taught this project that a room is only a room if something has walked
+## its length[/b], and it taught it the expensive way: the wing was impassable from the
+## day it was built, and the renderer, the roster, the resolve and every check over it
+## were perfectly happy. So the gallery is checked the way the wing is checked now
+## rather than the way the wing was checked then — a walker goes in one mouth, along it,
+## and out the other, with nothing steering.
+func _test_gallery() -> void:
+	_section("the gallery along the north wall")
+
+	var world := _world(&"gallery")
+	world.add_occupant(1, "Stroller")
+
+	var occupant := world.occupant_for(1)
+
+	# The screen is solid. Due north from the middle of the room, through the gap
+	# between the two middle posts — which is not a gap: they overlap by
+	# GALLERY_OVERLAP precisely so that a walker cannot be squeezed between them.
+	occupant.state.position = Vector2(0.0, -200.0)
+	occupant.state.velocity = Vector2.ZERO
+
+	for _i in range(600):
+		world.tick({1: _walk(Vector2.UP)})
+
+	_check(
+		not RoomContent.in_gallery(occupant.position()),
+		"walking north at the middle of the screen does not go through it (%.0f, %.0f)"
+			% [occupant.position().x, occupant.position().y]
+	)
+
+	# --- In by the west mouth, along, and out by the east -------------------
+
+	# [b]Nothing steers.[/b] Due north to the wall, then due east until the far side —
+	# two held directions, which is what makes this a statement about the room rather
+	# than about the path somebody found through it.
+	occupant.state.position = Vector2(-350.0, -180.0)
+	occupant.state.velocity = Vector2.ZERO
+
+	for _i in range(600):
+		world.tick({1: _walk(Vector2.UP)})
+
+	var mouth := occupant.position()
+	_check(
+		mouth.y < RoomContent.GALLERY_Y - RoomContent.GALLERY_POST_RADIUS,
+		"a walker gets past the screen's west end into the strip (%.0f, %.0f)"
+			% [mouth.x, mouth.y],
+		"the pillars are the doorposts; a mouth narrower than a walker is a wall"
+	)
+
+	var went_in := false
+	var shallowest := -INF
+
+	for _i in range(900):
+		world.tick({1: _walk(Vector2.RIGHT)})
+
+		if RoomContent.in_gallery(occupant.position()):
+			went_in = true
+			shallowest = maxf(shallowest, occupant.position().y)
+
+	var out := occupant.position()
+
+	_check(went_in, "and walks the length of the gallery rather than round it")
+	_check(
+		shallowest < RoomContent.GALLERY_Y,
+		"staying behind the screen the whole way (nearest the hall %.0f, screen at %.0f)"
+			% [shallowest, RoomContent.GALLERY_Y]
+	)
+	_check(
+		not RoomContent.in_gallery(out) and out.x > 0.0
+			and out.y < RoomContent.GALLERY_Y,
+		"and leaves by the east mouth rather than backing out of the west (%.0f, %.0f)"
+			% [out.x, out.y],
+		"a nook with one way in is a pocket, and one person standing in it is a locked door"
+	)
+
+	# --- It is empty, and that is the level rather than an omission ---------
+
+	# [b]The opposite of the wing's check, deliberately.[/b] The wing needs something to
+	# stand behind because it is a room you go to; the gallery IS the thing to stand
+	# behind, and a strip this deep with furniture in it is the wing's own bug written
+	# out a second time.
+	# Anything whose centre is north of the screen's FACE is standing in the strip. The
+	# screen's own posts are on the line and are the wall of it, not furniture in it.
+	var standing := 0
+	var face := RoomContent.GALLERY_Y - RoomContent.GALLERY_POST_RADIUS
+
+	for piece in RoomContent.furniture():
+		if piece.y < face and not RoomContent.in_wing(Vector2(piece.x, piece.y)):
+			standing += 1
+
+	_check(
+		standing == 0,
+		"and nothing stands inside it (%d)" % standing,
+		"four occupant diameters deep is two people talking and two getting past"
+	)
+
+	# --- Both mouths are wider than the front door --------------------------
+
+	# [b]Measured against the furniture that exists, not against the constants.[/b] The
+	# mouths are gaps between two different things placed by two different rules — a
+	# screen post and a pillar — so the only honest way to ask how wide they are is to
+	# measure every pair. A slot eight units wide is the family's own recurring bug and
+	# it looks like a way through in every picture of it.
+	var screen := RoomContent.gallery_screen()
+	var narrowest := INF
+
+	if not _check(screen.size() == RoomContent.GALLERY_POSTS, "the screen is six posts"):
+		_done()
+		return
+
+	for post in screen:
+		for other in RoomContent.furniture():
+			var at := Vector2(other.x, other.y)
+
+			# Itself, its neighbours in the screen, and the wing across the room.
+			if absf(at.y - post.y) < 1.0 or RoomContent.in_wing(at):
+				continue
+
+			narrowest = minf(
+				narrowest,
+				Vector2(post.x, post.y).distance_to(at) - post.z - other.z
+			)
+
+	_check(
+		is_finite(narrowest) and narrowest > RoomContent.DOORWAY_SPAN,
+		"and the narrowest way past it anywhere is wider than the front door (%.0f against %.0f)"
+			% [narrowest, RoomContent.DOORWAY_SPAN],
+		"this measures the hall's north lane as well as the two mouths, and the lane is what moving the screen south would close"
+	)
+
 	_done()
 
 

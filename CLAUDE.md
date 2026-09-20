@@ -263,6 +263,20 @@ The partition's northernmost post is at `NORTH_GATE_Y`, which is **derived** so 
 
 The wing is a circuit now rather than a pocket: in through the middle door, up the lane, out at the north. That matters here more than it would in a shooter, because **a lobby is the one place people genuinely do stand in doorways** — it is a room whose entire activity is standing about talking — and a second room with one door and somebody parked in it is a room you cannot leave. `headless_room` drives a walker the length of the wing and out the gate, so the gate is a route rather than a gap in a list.
 
+#### The gallery: a screen off the north wall, and the pillars are its doorposts
+
+The wing made the room two spaces. The hall was still one space with an island in the middle of it, which means the only thing between two conversations in the main room is distance — and a lobby's main room is where everybody is.
+
+`GALLERY_POSTS` posts stand off the north wall on `GALLERY_Y`, overlapping by the partition's twenty for the partition's reason. The strip behind them is `GALLERY_DEPTH` deep and is **left empty**, which is the opposite of the wing's rule and is the wing's lesson rather than a departure from it: the wing needs something to stand behind because it is a room you go to, and the gallery *is* the thing to stand behind. Four occupant diameters is two people stopped against the wall talking and two more getting past them, which is the only thing this strip has to do.
+
+**Both ends of the screen are placed against the north pillars rather than against the wall**, and the count is what places them. A post 167 units from a pillar centre leaves 52 between their faces and 8 for a walker — a slot nothing can pass, which reads in a picture as a way through and is this family's own recurring bug. A screen that stops 300 short has mouths so wide the gallery is not a room. At six the ends stand 265 from the pillar beside them, which leaves 169: more than the front door and less than a third of the hall.
+
+**The screen is thinner than the partition and the hall is what decided so.** The room's north half is 410 units from the island's edge to the wall, and the screen has to fit its own thickness, the gallery behind it and the hall's north lane into that. At the partition's radius of 90 the lane came out at 94 — a walker's window of 50, in the main room, which is the wing's bug moved into the hall. The check that says so measures the narrowest way past the screen *anywhere*, against the furniture that exists rather than against the constants, so it sees the hall lane as well as the two mouths; it read 100 against 100 and failed, and the radius is 50 now and it reads 136.
+
+**Its section drives the room rather than describing it**, because that is what the wing cost: a walker goes north past the screen's west end, then holds east until the far side, and has to come out past the east mouth having been behind the screen the whole way. Two held directions, nothing steering.
+
+And one check in it was worth more than the level. The first version asked `in_gallery` which pieces of furniture were the screen and got **none of them** — a post's centre sits exactly on `GALLERY_Y` and that predicate is a strict `<` — so the mouth measurement compared an empty set against an empty set and reported `inf` as a pass. "Is this point in the strip" and "is this circle part of the screen" are two questions and only one of them is a position test; `gallery_screen()` is the second one, and it is what `furniture()` builds the screen from.
+
 **The spawn is resolved too.** `Dot2DArena.spawn_position` knows the room's rectangle and
 nothing about what is standing in it, so a share of its answers are inside something. A
 lobby that puts somebody inside a bench is broken quietly.
@@ -406,9 +420,9 @@ tools/check.sh                # all four, after a parse pass
 
 | | | |
 | --- | --- | --- |
-| `headless_room` | 48 | the room alone. Membership, walls, and two worlds replaying the same commands bit-identically |
+| `headless_room` | 56 | the room alone. Membership, walls, and two worlds replaying the same commands bit-identically |
 | `headless_stack` | 23 | the player layer: the collision layout, the two sides, the class as a choice nothing applies, and the ring of seats |
-| `headless_presentation` | 70 | settings, audio, effects, the console and the party — **none of which `headless_room` can reach**, because that one is `RoomWorld` alone and has no client in it |
+| `headless_presentation` | 74 | settings, audio, effects, the console and the party — **none of which `headless_room` can reach**, because that one is `RoomWorld` alone and has no client in it |
 | `headless_net` | 65 | every encoder against its decoder, then a session over a lossy delaying loopback, then a walk into the furniture |
 | `dedicated` | 86 | a real `DotServer`, a real module, a real WebSocket listener, and the props, chat, voice, moderation and identity halves |
 | `sandbox` | 62 | **a real server and two real clients, over real sockets, in one process** — chat, props and voice all cross a wire here and nowhere else |

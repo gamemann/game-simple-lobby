@@ -37,6 +37,10 @@ var bridge: RoomBridge = null
 ## these have to survive it, exactly as the netcode manager does.
 var services: RoomServices = null
 
+## dot-moderation's live tools, and their commands. See [method _build_mod_tools].
+var mod_tools: DotModTools = null
+var mod_commands: DotModToolCommands = null
+
 ## What people have put in the room.
 ##
 ## [b]The module's, not the world's, for the same reason.[/b] A prop somebody placed is
@@ -484,7 +488,71 @@ func _build_services() -> DotResult:
 	# nobody heard.
 	services.chat.message_accepted.connect(_on_chat_accepted)
 
+	_build_mod_tools()
+
 	return DotResult.success(null)
+
+
+## What the live admin set means in a lobby, which is very little, and says so.
+##
+## [b]Moving people and renaming them is what a lobby needs a moderator for[/b] — the one
+## standing on the door, the one whose name should not be on the roster — so bring, goto,
+## send, return and rename work. Everything else is refused with a reason: nobody can be
+## hurt or die here, there is nothing to hold, and the movement modifiers would be
+## server-only changes to a PREDICTED 2D motor — `Dot2DMotor` carries no admin modifiers in
+## its replicated state the way dot-player-controller's first-person one does, so a server
+## that moved somebody their own client does not know about would rubber-band them.
+func _build_mod_tools() -> void:
+	mod_tools = DotModTools.new()
+	mod_tools.name = "ModTools"
+	mod_tools.register_service = false
+	mod_tools.manager = services.moderation
+	mod_tools.immunity_fn = func(id: StringName) -> int:
+		var session := server.session_by_userid(String(id).to_int()) if String(id).is_valid_int() else null
+		return session.immunity if session != null else 0
+	mod_tools.position_fn = func(id: StringName) -> Variant:
+		var occupant := world.occupant_for(String(id).to_int()) if String(id).is_valid_int() else null
+		return occupant.state.position if occupant != null else null
+	mod_tools.teleport_fn = func(id: StringName, to: Variant) -> void:
+		var occupant := world.occupant_for(String(id).to_int()) if String(id).is_valid_int() else null
+		if occupant != null and to is Vector2:
+			occupant.state.position = to as Vector2
+			occupant.state.velocity = Vector2.ZERO
+	# Pixels, not metres: a lobby's avatar is about forty across, and 1.5 would land one
+	# person on top of the other.
+	mod_tools.goto_standoff = 48.0
+
+	mod_tools.handlers[DotModTools.ACTION_RENAME] = func(id: StringName, args: Dictionary) -> DotResult:
+		var occupant := world.occupant_for(String(id).to_int()) if String(id).is_valid_int() else null
+		if occupant == null:
+			return DotResult.fail(DotError.CODE_STATE, "Nobody by that id is in the room.")
+		occupant.display_name = str(args["name"]).strip_edges().substr(0, 32)
+		return DotResult.success(occupant.display_name)
+
+	var prediction := "the 2D motor carries no admin modifiers a client could predict, so it would rubber-band"
+	var harmless := "nobody can be hurt in a lobby"
+	var refusals := {
+		DotModTools.ACTION_NOCLIP: prediction,
+		DotModTools.ACTION_FREEZE: prediction,
+		DotModTools.ACTION_SPEED: prediction,
+		DotModTools.ACTION_GRAVITY: "there is no gravity in a top-down room",
+		DotModTools.ACTION_GOD: harmless,
+		DotModTools.ACTION_BUDDHA: harmless,
+		DotModTools.ACTION_HEALTH: harmless,
+		DotModTools.ACTION_SLAY: harmless,
+		DotModTools.ACTION_SLAP: harmless,
+		DotModTools.ACTION_BURN: harmless,
+		DotModTools.ACTION_RESPAWN: "nobody dies in a lobby; bring or send moves somebody",
+		DotModTools.ACTION_GIVE: "there is nothing to hold in a lobby",
+		DotModTools.ACTION_STRIP: "there is nothing to hold in a lobby",
+		DotModTools.ACTION_BLIND: "the client draws no overlay a server could turn on",
+		DotModTools.ACTION_BEACON: "the client draws no marker a server could turn on",
+	}
+	for action: Variant in refusals:
+		mod_tools.unsupported_reasons[action] = refusals[action]
+
+	add_child(mod_tools)
+	mod_commands = DotModToolCommands.install(self, mod_tools, server)
 
 
 # --- The tick --------------------------------------------------------------
@@ -608,6 +676,11 @@ func _on_client_disconnected(session: DotClientSession, _reason: String) -> void
 	services.chat.leave_notice(session.peer_id, RoomServices.CHANNEL_ALL)
 	services.remove_peer(session.peer_id)
 	props.clear_owner(session.userid)
+
+	if mod_tools != null:
+		# Where a bring would return them to. The next person given this userid must not
+		# be put back somewhere this one stood.
+		mod_tools.forget(StringName(str(session.userid)))
 
 	bridge.remove_peer(session.peer_id)
 	_joined.erase(session.userid)

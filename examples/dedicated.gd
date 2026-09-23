@@ -75,6 +75,7 @@ func _run() -> void:
 		_test_module()
 		_test_commands()
 		_test_joining()
+		await _test_live_tools()
 		_test_props()
 		_test_services()
 		_test_query()
@@ -410,6 +411,67 @@ func _command_output(line: String) -> PackedStringArray:
 ##
 ## What this covers is everything downstream of admission, which is the part a socket
 ## would only slow down.
+## dot-moderation's live tools in a lobby: moving people and renaming them work, and
+## everything else is refused with the lobby's reason.
+func _test_live_tools() -> void:
+	_section("the moderator's live tools")
+
+	var module := _module()
+	_check(
+		_server.console.find_command("send") != null and _server.console.find_command("slay") != null,
+		"the live tools' commands are on the console"
+	)
+
+	var sessions: Array[DotClientSession] = []
+	for entry in [[52, 5252, "Bea"], [53, 5353, "Cy"]]:
+		var session := DotClientSession.new()
+		session.peer_id = int(entry[0])
+		session.userid = int(entry[1])
+		session.display_name = str(entry[2])
+		var _adopted := _server.adopt_session(session)
+		var _in := module.bridge.add_occupant(session.peer_id, session.userid, session.display_name)
+		sessions.append(session)
+
+	var bea := _world().occupant_for(5252)
+	var cy := _world().occupant_for(5353)
+	bea.state.position = Vector2(100.0, 100.0)
+	cy.state.position = Vector2(600.0, 400.0)
+
+	var _sent := await _live("send Bea Cy")
+	_check(
+		bea.state.position.distance_to(cy.state.position) < 60.0
+			and bea.state.position.distance_to(cy.state.position) > 1.0,
+		"`send Bea Cy` puts Bea beside Cy, not on top of them",
+		"%.1f px apart" % bea.state.position.distance_to(cy.state.position)
+	)
+
+	var _back := await _live("return Bea")
+	_check(bea.state.position.is_equal_approx(Vector2(100.0, 100.0)),
+		"and `return Bea` puts her back exactly", str(bea.state.position))
+
+	var _renamed := await _live("rename Bea Beatrice")
+	_check(bea.display_name == "Beatrice", "`rename` reaches the roster")
+
+	var slay := await _live("slay Cy")
+	_check(" ".join(slay).contains("nobody can be hurt"),
+		"`slay` is refused with the lobby's reason", " | ".join(slay))
+
+	for session in sessions:
+		module.bridge.remove_peer(session.peer_id)
+		var _released := _server.release_session(session.peer_id)
+	_done()
+
+
+func _live(line: String) -> PackedStringArray:
+	var captured: Array[String] = []
+	var context := DotCmdContext.console("", PackedStringArray())
+	context.reply_sink = func(text: String) -> void: captured.append(text)
+	_server.console.execute(line, context)
+	await get_tree().process_frame
+	await get_tree().process_frame
+	return PackedStringArray(captured)
+
+
 func _test_joining() -> void:
 	_section("membership")
 

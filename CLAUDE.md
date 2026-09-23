@@ -22,6 +22,11 @@ rounds, no combat, no items. What is left is admission, membership, replication,
 prediction and chat, and every one of those is something every other game also has to get
 right.
 
+
+## The moderator's live tools, in a room where nobody can be hurt
+
+dot-moderation's live tools are on this server's console and in chat, and **what a lobby needs a moderator for is moving people and renaming them**: bring, goto, send, return and rename work, with a stand-off in pixels (48) rather than the addon's metre and a half, which would put one avatar on top of the other. Everything else is refused with a reason `modtools` prints — nobody can be hurt or die here, there is nothing to hold, and noclip, freeze and speed would be server-only changes to a predicted 2D motor that carries no admin modifiers, so the owner's client would rubber-band. `dedicated` sends one occupant to another, returns them exactly, renames one and has a slay refused.
+
 ## Chat is dot-chat's, and there is still exactly one path
 
 It used to be dot-server's, whole: `DotChatManager` routed, sanitised, flood-limited and

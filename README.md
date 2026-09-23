@@ -63,7 +63,7 @@ tools/check.sh --parse        # the parse pass on its own
 | `examples/headless_stack.tscn` | 24 | the player layer: sides, classes, and the ring of seats |
 | `examples/headless_presentation.tscn` | 74 | settings, audio, effects, the console, the menus and the party |
 | `examples/headless_net.tscn` | 66 | the wire and the netcode, over a lossy loopback |
-| `examples/dedicated.tscn` | 118 | a real `DotServer` with the module in it, and a game change under it |
+| `examples/dedicated.tscn` | 123 | a real `DotServer` with the module in it, a moderator's live tools, and a game change under it |
 | `examples/sandbox.tscn` | 62 | **two real clients, over real sockets** |
 
 The last one is the one that matters. See CLAUDE.md.

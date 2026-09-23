@@ -13,7 +13,7 @@ const RoomWorld := preload("../game/room_world.gd")
 ## Exits non-zero on any failure. No netcode, no server, no rendering — this is
 ## [RoomWorld] alone, which is the only part of the game that decides anything.
 
-const CHECKS := 56
+const CHECKS := 68
 
 var _passed := 0
 var _failed := 0
@@ -47,6 +47,8 @@ func _run() -> void:
 	_test_bounds()
 	_test_wing()
 	_test_gallery()
+	_test_snug()
+	_test_reach()
 	_test_determinism()
 	_test_bubbles()
 	_test_spectating()
@@ -584,6 +586,283 @@ func _test_gallery() -> void:
 		"this measures the hall's north lane as well as the two mouths, and the lane is what moving the screen south would close"
 	)
 
+	_done()
+
+
+## The snug in the south-east corner: in one gate, round the seat, and out the other.
+##
+## [b]Driven, both ways round, because a corner room has two ways to be a pocket.[/b] The
+## wing was a corridor with a cork in each end and the gallery's first check measured an
+## empty set; both were lists of circles every other check was happy with. So this
+## walks it — two held directions each way, nothing steering — and then measures every
+## gap the snug makes against the furniture that exists, walls included.
+func _test_snug() -> void:
+	_section("the snug in the south-east corner")
+
+	var world := _world(&"snug")
+	world.add_occupant(1, "Lounger")
+
+	var walker := world.occupant_for(1)
+	var seat := RoomContent.snug_seat()
+	var seat_at := Vector2(seat.x, seat.y)
+
+	# The corner holds. Due south-east from the hall, straight at the post the two arms
+	# share — which is where a join between two separately built arms would have left a
+	# diagonal slot.
+	var corner := Vector2(RoomContent.SNUG_X, RoomContent.SNUG_Y)
+	walker.state.position = corner - Vector2(140.0, 140.0)
+	walker.state.velocity = Vector2.ZERO
+
+	for _i in range(600):
+		world.tick({1: _walk(Vector2(1.0, 1.0))})
+
+	_check(
+		not RoomContent.in_snug(walker.position()),
+		"walking into the corner of the L does not go through it (%.0f, %.0f)"
+			% [walker.position().x, walker.position().y]
+	)
+
+	# --- In by the east gate, out by the south ------------------------------
+
+	# Down the east wall from the benches. The gate is DOORWAY_SPAN against the wall and
+	# the seat stops on the gate's inner edge, so this lane should never touch it.
+	# Down the middle of the gate, which is where somebody walking in without aiming is.
+	var gate_post := Vector2(RoomContent.SNUG_GATE_X, RoomContent.SNUG_Y)
+	walker.state.position = Vector2(
+		RoomContent.ROOM_EXTENT.x - RoomContent.DOORWAY_SPAN * 0.5, 0.0
+	)
+	walker.state.velocity = Vector2.ZERO
+	var nearest_seat := INF
+	var nearest_post := INF
+
+	for _i in range(600):
+		world.tick({1: _walk(Vector2.DOWN)})
+		nearest_seat = minf(
+			nearest_seat, walker.position().distance_to(seat_at) - seat.z - walker.state.radius
+		)
+		nearest_post = minf(
+			nearest_post,
+			walker.position().distance_to(gate_post)
+				- RoomContent.SNUG_POST_RADIUS - walker.state.radius
+		)
+
+	var down := walker.position()
+	_check(
+		RoomContent.in_snug(down) and down.y > RoomContent.SNUG_GATE_Y,
+		"a walker holding south comes in by the east gate to the far wall (%.0f, %.0f)"
+			% [down.x, down.y],
+		"the gate is a door against the wall; a post or a seat in the lane is a cork"
+	)
+	# [b]No nearer than the gate's own post, rather than merely not touching.[/b] A seat
+	# whose face stood on the gate's inner edge would be passed exactly as close as the
+	# post beside it is; any closer and it is standing in the lane. The first version of
+	# this asked only "did not touch", and passed with the seat twelve units into it.
+	_check(
+		nearest_seat >= nearest_post - 0.5,
+		"with the seat standing no further into the lane than the gate's own post (%.1f against %.1f)"
+			% [nearest_seat, nearest_post],
+		"a doorway that opens onto a table is the wing's bug"
+	)
+
+	var inside := false
+	var went_back := false
+
+	for _i in range(600):
+		world.tick({1: _walk(Vector2.LEFT)})
+
+		if RoomContent.in_snug(walker.position()):
+			inside = true
+
+		if walker.position().y < RoomContent.SNUG_Y:
+			went_back = true
+
+	var out := walker.position()
+	_check(
+		inside and not went_back,
+		"and crosses it under the seat rather than going back the way it came"
+	)
+	_check(
+		not RoomContent.in_snug(out) and out.x < RoomContent.SNUG_X
+			and out.y > RoomContent.SNUG_GATE_Y,
+		"and leaves by the south gate (%.0f, %.0f)" % [out.x, out.y],
+		"a corner room with one way out is a pocket, and one person in it is a locked door"
+	)
+
+	# --- And the other way round -------------------------------------------
+
+	walker.state.position = Vector2(
+		RoomContent.SNUG_X - 150.0, RoomContent.ROOM_EXTENT.y - 30.0
+	)
+	walker.state.velocity = Vector2.ZERO
+
+	for _i in range(600):
+		world.tick({1: _walk(Vector2.RIGHT)})
+
+	var along := walker.position()
+	_check(
+		RoomContent.in_snug(along) and along.x > RoomContent.SNUG_GATE_X,
+		"in by the south gate and along the wall to the corner (%.0f, %.0f)"
+			% [along.x, along.y]
+	)
+
+	for _i in range(600):
+		world.tick({1: _walk(Vector2.UP)})
+
+	var up := walker.position()
+	_check(
+		not RoomContent.in_snug(up) and up.y < RoomContent.SNUG_Y,
+		"and out by the east gate (%.0f, %.0f)" % [up.x, up.y]
+	)
+
+	# --- Every gap it makes, against what is actually there ----------------
+
+	# [b]Walls included, because both gates are against one.[/b] The gallery's check
+	# measured circle against circle and that was right for a screen standing free; a
+	# gate derived against a wall is a gap no circle-pair ever sees. The seat against its
+	# own screen is skipped: those gaps seal the crook behind it, which nobody can reach
+	# and nobody is meant to.
+	var screen := RoomContent.snug_screen()
+
+	if not _check(
+		screen.size() == 1 + RoomContent.SNUG_ARM_POSTS * 2,
+		"the L is a shared corner and two arms (%d posts)" % screen.size()
+	):
+		_done()
+		return
+
+	var mine := PackedVector3Array(screen)
+	mine.append(seat)
+	var narrowest := INF
+	var where := ""
+	var room := RoomContent.bounds()
+
+	for piece in mine:
+		var at := Vector2(piece.x, piece.y)
+
+		for gap in [
+			room.end.x - at.x - piece.z, room.end.y - at.y - piece.z,
+		]:
+			if gap < narrowest:
+				narrowest = gap
+				where = "(%.0f, %.0f) to a wall" % [at.x, at.y]
+
+		for other in RoomContent.furniture():
+			if other in mine:
+				continue
+
+			var gap := at.distance_to(Vector2(other.x, other.y)) - piece.z - other.z
+
+			if gap < narrowest:
+				narrowest = gap
+				where = "(%.0f, %.0f) to (%.0f, %.0f)" % [at.x, at.y, other.x, other.y]
+
+	_check(
+		is_finite(narrowest) and narrowest >= RoomContent.DOORWAY_SPAN - 0.01,
+		"and nothing about it is narrower than the front door (%.0f against %.0f, %s)"
+			% [narrowest, RoomContent.DOORWAY_SPAN, where],
+		"its two gates are the door's width by derivation; anything narrower is a slot"
+	)
+	_done()
+
+
+## Anywhere a walker can stand, a walker can get to.
+##
+## [b]The other half of the question every level here has asked.[/b] The wing, the gate,
+## the gallery and the snug each ask "can a walker get through this gap"; none asks "is
+## there anywhere in the room a walker fits and cannot reach", which is the one that
+## produces a room with a sealed pocket in it that every picture shows as floor. A grid
+## over the room, every point a walker's centre fits at, and a flood from the hall.
+func _test_reach() -> void:
+	_section("anywhere a walker fits, a walker can reach")
+
+	const STEP := 8.0
+	var radius := RoomContent.OCCUPANT_RADIUS
+	var inner := RoomContent.bounds().grow(-radius)
+	var columns := int(floor(inner.size.x / STEP)) + 1
+	var rows := int(floor(inner.size.y / STEP)) + 1
+	var fits := PackedByteArray()
+	fits.resize(columns * rows)
+	var total := 0
+
+	for row in range(rows):
+		for column in range(columns):
+			var at := inner.position + Vector2(column, row) * STEP
+			var normals: Array = []
+
+			if RoomContent.resolve_furniture(at, radius, normals) == at:
+				fits[row * columns + column] = 1
+				total += 1
+
+	# From the middle of the hall's south side, which is nowhere near any level.
+	var start := -1
+	var best := INF
+
+	for index in range(fits.size()):
+		if fits[index] == 0:
+			continue
+
+		var at := inner.position + Vector2(index % columns, index / columns) * STEP
+		var distance := at.distance_to(Vector2(0.0, 300.0))
+
+		if distance < best:
+			best = distance
+			start = index
+
+	var seen := PackedByteArray()
+	seen.resize(fits.size())
+	var queue := PackedInt32Array([start])
+	seen[start] = 1
+	var reached := 0
+	var reached_snug := false
+	var head := 0
+
+	while head < queue.size():
+		var index := queue[head]
+		head += 1
+		reached += 1
+		var column := index % columns
+		var row := index / columns
+
+		if RoomContent.in_snug(inner.position + Vector2(column, row) * STEP):
+			reached_snug = true
+
+		for step in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
+			var c: int = column + step.x
+			var r: int = row + step.y
+
+			if c < 0 or r < 0 or c >= columns or r >= rows:
+				continue
+
+			var next := r * columns + c
+
+			if fits[next] == 1 and seen[next] == 0:
+				seen[next] = 1
+				queue.append(next)
+
+	# The first unreached point, so a failure says where to look.
+	var stranded := ""
+
+	for index in range(fits.size()):
+		if fits[index] == 1 and seen[index] == 0:
+			var at := inner.position + Vector2(index % columns, index / columns) * STEP
+			stranded = " — first at (%.0f, %.0f)" % [at.x, at.y]
+			break
+
+	_check(
+		total > columns * rows / 2,
+		"most of the room is floor (%d of %d points)" % [total, columns * rows],
+		"a sweep over a room that is all furniture proves nothing about pockets"
+	)
+	_check(
+		reached_snug,
+		"the flood from the hall gets into the snug"
+	)
+	_check(
+		reached == total,
+		"and every point a walker fits at is one it can get to (%d of %d%s)"
+			% [reached, total, stranded],
+		"a sealed pocket draws as floor in every picture of it"
+	)
 	_done()
 
 

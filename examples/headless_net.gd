@@ -29,7 +29,7 @@ const CLIENT_ID := RoomOffline.CLIENT_OCCUPANT
 ## A second person, with no connection. Peer 0, and the thing peer 0 must never mean.
 const GUEST_ID := 500002
 
-const CHECKS := 65
+const CHECKS := 66
 
 var _passed := 0
 var _failed := 0
@@ -509,9 +509,16 @@ func _clear_heading(from: Vector2) -> Vector2:
 			return heading
 
 	# Nothing clear anywhere. A level this crowded is a level worth failing on rather
-	# than one to quietly measure a grinding walk in.
-	push_error("no clear heading from %s; the room's furniture leaves nowhere to walk" % from)
-	return Vector2.RIGHT
+	# than one to quietly measure a grinding walk in — so the answer is ZERO and the
+	# caller turns it into a failed check.
+	#
+	# [b]This used to `push_error` and return RIGHT[/b], under the same comment. A
+	# `push_error` is a line on stderr and changes no exit code, so with no clear heading
+	# anywhere this suite walked due east into the wall, measured a correction rate
+	# against it, and reported "65 passed, 0 failed" — the one outcome the comment above
+	# said it would not allow. Found while adding the snug, which is furniture on the
+	# side of the room this scan starts from.
+	return Vector2.ZERO
 
 
 func _test_second_person() -> void:
@@ -713,6 +720,16 @@ func _test_loss() -> void:
 	# That case is worth testing and gets its own section below; this one is about
 	# prediction under loss in the open, which is what it has always been about.
 	command.move = _clear_heading(start)
+
+	if not _check(
+		command.move != Vector2.ZERO,
+		"there is open floor to walk on from the spawn (heading %.0f degrees)"
+			% rad_to_deg(command.move.angle()),
+		"no heading from %s clears the furniture for %.0f units" % [start, WALK_REACH]
+	):
+		_done()
+		return
+
 	await _pump(pair, 120, command)
 
 	# Stopped and settled, for the reason above: a moving client is meant to be ahead.

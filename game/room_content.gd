@@ -179,6 +179,13 @@ static func furniture() -> PackedVector3Array:
 	# pillars as its doorposts. See [constant GALLERY_DEPTH].
 	out.append_array(gallery_screen())
 
+	# --- The snug in the south-east corner -----------------------------------
+	#
+	# An L of screen posts standing off the corner, a gate at each end of it against a
+	# wall, and a seat in the crook. See [constant SNUG_ARM_POSTS].
+	out.append_array(snug_screen())
+	out.append(snug_seat())
+
 	return out
 
 
@@ -322,6 +329,105 @@ static func gallery_screen() -> PackedVector3Array:
 static func in_gallery(at: Vector2) -> bool:
 	var half := float(GALLERY_POSTS - 1) * 0.5 * gallery_spacing() + GALLERY_POST_RADIUS
 	return at.y < GALLERY_Y and absf(at.x) <= half
+
+
+# --- The snug ----------------------------------------------------------------
+
+## The radius of one of the snug's screen posts.
+##
+## [b]Thinner than the gallery's, and the neighbours decide so rather than the look.[/b]
+## The snug is boxed in by two things it must not narrow: the south bench above it and
+## the south-east pillar beside it. At the gallery's 50 an arm of useful length puts its
+## face within 90 of the bench, which is the gallery's own lesson — a screen that closes
+## the hall's lane while making a room — so the posts are 30 and the arms are longer.
+const SNUG_POST_RADIUS := 30.0
+
+## How far apart the snug's posts stand, centre to centre.
+##
+## Overlapping by [constant GALLERY_OVERLAP], for the partition's reason: two circles that
+## merely touch leave a contact point [method resolve_circles] can push a walker through.
+const SNUG_SPACING := SNUG_POST_RADIUS * 2.0 - GALLERY_OVERLAP
+
+## How many posts each arm has beyond the corner post they share.
+##
+## [b]Three, and it is the most the corner has room for.[/b] At four the north arm's face
+## comes within 70 of the south bench and the corner post within 74 of the south-east
+## pillar — two slots narrower than the front door, in the hall, made by a room nobody
+## is standing in. At three those are 110 and 116.
+##
+## [b]The arms share the corner post, and it is what makes the corner a corner.[/b] Without
+## it the two arms' first posts face each other across the diagonal and overlap by
+## [code]2r - spacing * sqrt(2)[/code], which is 3.4 units at these numbers — enough, and
+## only just: at the gallery's 50 and 80 the same join is a 13-unit hole. A join in a
+## wall is exactly where nobody thinks to walk, so the corner is placed rather than
+## left to arithmetic.
+const SNUG_ARM_POSTS := 3
+
+## The centre of the north arm's east end post.
+##
+## [b]Derived so the east gate is exactly [constant DOORWAY_SPAN] against the east
+## wall[/b], the way [constant NORTH_GATE_Y] derives the wing's north gate: move the wall
+## or widen the door and the gate follows.
+const SNUG_GATE_X := ROOM_EXTENT.x - DOORWAY_SPAN - SNUG_POST_RADIUS
+
+## The centre of the west arm's south end post. The south gate, derived the same way.
+const SNUG_GATE_Y := ROOM_EXTENT.y - DOORWAY_SPAN - SNUG_POST_RADIUS
+
+## Where the two arms meet: the corner post's x, and the line the west arm stands on.
+const SNUG_X := SNUG_GATE_X - SNUG_SPACING * SNUG_ARM_POSTS
+
+## The corner post's y, and the line the north arm stands on.
+const SNUG_Y := SNUG_GATE_Y - SNUG_SPACING * SNUG_ARM_POSTS
+
+## How big the seat in the snug's crook is.
+##
+## [b]Derived from what the floor round it has to hold, not from how big the crook
+## is.[/b] Somebody standing at the seat is one occupant's width, and somebody else
+## getting past them needs the front door's width, so that is the band left between the
+## seat and each wall. It came out at 38.
+##
+## The first version filled the crook instead — out to the inner edge of each gate, so
+## a walker down either gate still never touched it — and every check passed. The
+## picture was a clump of circles in the corner with two door-width corridors round it:
+## the wing's corridor-with-furniture, drawn again, in a room that was meant to be the
+## one place in the hall to sit down.
+const SNUG_SEAT_RADIUS := (
+	ROOM_EXTENT.x - SNUG_X - SNUG_POST_RADIUS - DOORWAY_SPAN - OCCUPANT_RADIUS * 2.0
+) * 0.5
+
+
+## The snug's screen posts, on their own: the corner, then the north arm eastward, then
+## the west arm southward.
+##
+## [b]Separate from [method furniture] for [method gallery_screen]'s reason[/b] — "is this
+## circle part of the snug's wall" is not a position test, and asking a position
+## predicate for it is how the gallery's first mouth check measured an empty set.
+static func snug_screen() -> PackedVector3Array:
+	var out := PackedVector3Array()
+	out.append(Vector3(SNUG_X, SNUG_Y, SNUG_POST_RADIUS))
+
+	for index in range(1, SNUG_ARM_POSTS + 1):
+		out.append(Vector3(SNUG_X + SNUG_SPACING * index, SNUG_Y, SNUG_POST_RADIUS))
+
+	for index in range(1, SNUG_ARM_POSTS + 1):
+		out.append(Vector3(SNUG_X, SNUG_Y + SNUG_SPACING * index, SNUG_POST_RADIUS))
+
+	return out
+
+
+## The seat, in the crook of the L, against both arms' inner faces.
+static func snug_seat() -> Vector3:
+	var inset := SNUG_POST_RADIUS + SNUG_SEAT_RADIUS
+	return Vector3(SNUG_X + inset, SNUG_Y + inset, SNUG_SEAT_RADIUS)
+
+
+## Whether [param at] is inside the snug rather than in the hall.
+##
+## Read from the constants the posts are placed from, for [method in_wing]'s reason. A
+## point in either gate counts as inside once it is past the arm's line, which is what
+## somebody standing there would say.
+static func in_snug(at: Vector2) -> bool:
+	return at.x > SNUG_X and at.y > SNUG_Y
 
 
 ## Whether [param at] is in the wing behind the partition rather than in the hall.

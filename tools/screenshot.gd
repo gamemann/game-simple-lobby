@@ -58,6 +58,11 @@ func _initialize() -> void:
 	for i in names.size():
 		world.add_occupant(i + 1, names[i])
 
+	# One of them in the snug. A room nobody is drawn standing in cannot show whether a
+	# person fits in it, and the snug is the smallest room here.
+	var seat := RoomContent.snug_seat()
+	world.occupant_for(5).state.position = Vector2(seat.x + 80.0, seat.y + 80.0)
+
 	# Props, placed through the real spawner, because a placement drawn from a hand-built
 	# dictionary is a picture of a dictionary. This is the one place anybody looks at what
 	# a bench, a rug and a plant actually come out as — and the family's own record here

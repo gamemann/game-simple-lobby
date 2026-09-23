@@ -268,6 +268,28 @@ The wing made the room two spaces. The hall was still one space with an island i
 
 And one check in it was worth more than the level. The first version asked `in_gallery` which pieces of furniture were the screen and got **none of them** — a post's centre sits exactly on `GALLERY_Y` and that predicate is a strict `<` — so the mouth measurement compared an empty set against an empty set and reported `inf` as a pass. "Is this point in the strip" and "is this circle part of the screen" are two questions and only one of them is a position test; `gallery_screen()` is the second one, and it is what `furniture()` builds the screen from.
 
+#### The snug: an L off the south-east corner, a gate at each end, and a seat in the crook
+
+The wing is a room you go to and the gallery is a thing you stand behind. Neither is somewhere to *sit*, and the south-east quarter of the hall was the one part of the room with nothing in it.
+
+An L of `SNUG_POST_RADIUS` posts stands off the corner: a north arm running east and a west arm running south, **sharing one corner post**. Each arm stops `DOORWAY_SPAN` short of its wall, derived the way `NORTH_GATE_Y` is (`SNUG_GATE_X`, `SNUG_GATE_Y`), so the snug has two gates against two walls and is a circuit rather than a pocket. The shared corner is placed rather than left to arithmetic: without it the arms' first posts overlap across the diagonal by `2r - spacing·√2`, which is 3.4 units at these numbers and a 13-unit hole at the gallery's.
+
+**The neighbours size it, not the corner.** Two things box it in and it must not narrow either of them: the south bench above it and the south-east pillar beside it. That is why the posts are 30 rather than the gallery's 50, and why `SNUG_ARM_POSTS` is three. At four, the north arm's face comes within 70 of the bench and the corner post within 74 of the pillar: two slots in the hall, narrower than the front door, made by a room nobody is standing in. At three those gaps are 110 and 116.
+
+**The seat is sized from the floor round it, and the first size came from a picture.** It sits in the crook against both arms' inner faces. Version one filled the crook out to the inner edge of each gate, so a walker coming straight through either gate still never touched it. Every check passed, and `tools/screenshot.sh` showed a clump of circles in the corner with two door-width corridors round it: the wing's corridor-with-furniture drawn again. `SNUG_SEAT_RADIUS` now leaves a band between the seat and each wall of one occupant's width plus `DOORWAY_SPAN`, which is one person standing at the seat and another getting past them. It came out at 38.
+
+`headless_room`'s **the snug** section drives it both ways round, on two held directions each way. South from the benches down the east gate to the far wall, then west under the seat and out the south gate. Then east along the south wall in by the south gate, and north out the east gate. On the way down it asserts that the seat stands no further into the gate's lane than the gate's own post does. Its first version asked only "did not touch", and that passed with the seat twelve units into the lane. The gap measurement includes the **walls** this time, because both gates are against one and a gate derived against a wall is a gap no circle pair ever sees. It reads exactly 100 against 100 at the east gate, which is the derivation holding.
+
+**And the room is now asked the other half of the question.** The wing, the gate, the gallery and the snug each asked whether a walker gets through a gap; nothing asked whether there is anywhere in the room a walker fits and *cannot reach*. That question produces a sealed pocket that every picture shows as floor. **anywhere a walker fits, a walker can reach** lays an 8-unit grid over the room, marks every point a walker's centre fits at, and floods from the hall: 21,707 points, all of them reached. With both snug gates closed it reports the pocket and where it starts.
+
+##### The check it found: a crowded level that `headless_net` promised to fail on, and passed
+
+`headless_net`'s **under loss** section walks along `_clear_heading`, which scans 64 headings from the spawn for one clear of furniture for 480 units. Its comment says that if there is none, *"a level this crowded is a level worth failing on rather than one to quietly measure a grinding walk in"*. The code under that comment called `push_error` and returned `Vector2.RIGHT`. A `push_error` is a line on stderr and changes no exit code, so with no clear heading anywhere (forced by lengthening the reach) the suite walked due east into the wall, measured a correction rate against it, and exited 0 with **65 passed, 0 failed**. The one outcome the comment ruled out.
+
+The snug is what made it worth looking at. The spawn is the ring's east seat and the heading the scan used to choose, 45°, runs straight through where the snug now stands. The scan now picks 101° (rate 0.275 → 0.300, drift 0.063 → 0.072, both well inside their bars). A heading that silently gives up is the level after this one making the loss section measure a wall. It returns zero now and the section fails a check on it, `there is open floor to walk on from the spawn`, which fails and exits 1 with the reach lengthened.
+
+**Not folded in: `[lobby-earshot-1]`.** The snug is the obvious room to be out of earshot in, and it isn't. `near` is still a radius through its screen, as it is through the partition. The fix is a `can_hear_fn` seam in dot-chat's router and dot-voice's, and it belongs in those two repositories rather than in a position function that lies about where somebody is standing.
+
 **The spawn is resolved too.** `Dot2DArena.spawn_position` knows the room's rectangle and
 nothing about what is standing in it, so a share of its answers are inside something. A
 lobby that puts somebody inside a bench is broken quietly.
@@ -419,10 +441,10 @@ tools/check.sh                # every suite ci.yml names, after a parse pass
 
 | | | |
 | --- | --- | --- |
-| `headless_room` | 56 | the room alone. Membership, walls, and two worlds replaying the same commands bit-identically |
+| `headless_room` | 68 | the room alone. Membership, walls, every level walked by a held direction, a flood over the whole floor for sealed pockets, and two worlds replaying the same commands bit-identically |
 | `headless_stack` | 24 | the player layer: the collision layout, the two sides, the class as a choice nothing applies, and the ring of seats — filled past eight, because two arrivals cannot tell a seat chooser from a coin |
 | `headless_presentation` | 74 | settings, audio, effects, the console and the party — **none of which `headless_room` can reach**, because that one is `RoomWorld` alone and has no client in it |
-| `headless_net` | 65 | every encoder against its decoder, then a session over a lossy delaying loopback, then a walk into the furniture |
+| `headless_net` | 66 | every encoder against its decoder, then a session over a lossy delaying loopback, then a walk into the furniture |
 | `dedicated` | 116 | a real `DotServer`, a real module, a real WebSocket listener, and the props, chat, voice, moderation and identity halves — and a game change under the loaded module, to another room, to a game that is not one, and back |
 | `sandbox` | 62 | **a real server and two real clients, over real sockets, in one process** — chat, props and voice all cross a wire here and nowhere else |
 

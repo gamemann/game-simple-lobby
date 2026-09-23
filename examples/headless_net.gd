@@ -197,13 +197,13 @@ func _test_wire() -> void:
 func _test_event_bounds() -> void:
 	_section("refusals")
 
-	var bad := RoomEvent.of(RoomEvents.Kind.size() + 3, PackedByteArray())
+	var bad := RoomEvent.new(RoomEvents.Kind.size() + 3, PackedByteArray())
 	_check(not bad.validate().ok, "an unknown event kind is refused")
 
-	var good := RoomEvent.of(RoomEvents.Kind.HELLO, PackedByteArray([1, 2, 3]))
+	var good := RoomEvent.new(RoomEvents.Kind.HELLO, PackedByteArray([1, 2, 3]))
 	_check(good.validate().ok, "and a known one is not")
 
-	var ask := RoomRequest.of(RoomEvents.Ask.size() + 1)
+	var ask := RoomRequest.new(RoomEvents.Ask.size() + 1)
 	_check(not ask.validate().ok, "an unknown ask is refused")
 
 	# [b]Wire ids have to be the same number on two different machines.[/b]

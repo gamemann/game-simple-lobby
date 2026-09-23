@@ -445,7 +445,7 @@ tools/check.sh                # every suite ci.yml names, after a parse pass
 | `headless_stack` | 24 | the player layer: the collision layout, the two sides, the class as a choice nothing applies, and the ring of seats — filled past eight, because two arrivals cannot tell a seat chooser from a coin |
 | `headless_presentation` | 74 | settings, audio, effects, the console and the party — **none of which `headless_room` can reach**, because that one is `RoomWorld` alone and has no client in it |
 | `headless_net` | 66 | every encoder against its decoder, then a session over a lossy delaying loopback, then a walk into the furniture |
-| `dedicated` | 116 | a real `DotServer`, a real module, a real WebSocket listener, and the props, chat, voice, moderation and identity halves — and a game change under the loaded module, to another room, to a game that is not one, and back |
+| `dedicated` | 118 | a real `DotServer`, a real module, a real WebSocket listener, and the props, chat, voice, moderation and identity halves — and a game change under the loaded module, to another room, to a game that is not one, and back |
 | `sandbox` | 62 | **a real server and two real clients, over real sockets, in one process** — chat, props and voice all cross a wire here and nowhere else |
 
 **The list of suites lives in `.github/workflows/ci.yml` and nowhere else.** `tools/check.sh` reads its `suites:` line and fails if `release.yml`'s differs. Before that, check.sh carried its own list, which had lost `headless_stack`, and CI auto-detected `examples/headless_*` — so neither `dedicated` nor `sandbox`, the two that run a real server, ever ran in CI.
@@ -632,6 +632,14 @@ What it takes from the family instead is the key. `RoomUi.OPEN_CHAT_ACTION` is a
 **There is deliberately no `chat_window` setting here, and this is the only game where that is right.** Everywhere else the box is drawn over a game and "I chat somewhere else" is a sensible thing for a player to say. Here, turning it off leaves a person standing in an empty room with no way to say so. `headless_presentation` asserts the setting's *absence*, so nobody adds it later for symmetry.
 
 The server still tells its clients what is carrying chat — `RoomServices` points `DotChatManager.watch_relay` at the relay it builds — because every other game uses that answer and the lobby is where the site's relay is most likely to be on. Nothing here hides anything for it.
+
+## No message preloads itself
+
+`room_event.gd` and `room_request.gd` each began by preloading themselves, for a typed `of()` factory. mg-buses-from-hell measured that line (8ed866c) as enough to leak the whole script graph at exit on Godot 4.7.2: a script that `extends DotNetMessage` and preloads ITSELF, first loaded by a module inside a running `DotServer` — which is how every deployed server loads a game. Both are built with `new(kind, body)` now, an `_init` whose arguments default because dot-net's registry decodes with a bare `new()`.
+
+`dedicated`'s last section, **exiting clean**, reads every `DotNetMessage` script under `game/` as text and fails on a self-preload. It is on the source deliberately: the leak is printed by the engine after `quit()`, where no assertion can reach.
+
+**Here it was not the cause, and the leak is still open.** `dedicated` exits with 232 ObjectDB instances, 170 resources and a VariantPools page, exactly as many before the change as after (2026-09-23) — the whole-script-graph shape, held up by something else.
 
 ## Things deliberately not here
 

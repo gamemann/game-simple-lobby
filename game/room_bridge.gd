@@ -297,7 +297,7 @@ func _broadcast(kind: int, body: PackedByteArray) -> void:
 		return
 
 	for peer_id in _ready_peers.keys():
-		net.send(RoomEvent.of(kind, body), int(peer_id))
+		net.send(RoomEvent.new(kind, body), int(peer_id))
 
 
 ## Sends an event to one peer.
@@ -310,7 +310,7 @@ func _tell(peer_id: int, kind: int, body: PackedByteArray) -> void:
 	if net == null or not net.is_server or peer_id <= 0:
 		return
 
-	net.send(RoomEvent.of(kind, body), peer_id)
+	net.send(RoomEvent.new(kind, body), peer_id)
 
 
 # --- Membership ------------------------------------------------------------
@@ -931,7 +931,7 @@ func say(channel_id: StringName, text: String) -> void:
 	if net == null or net.is_server or text.strip_edges() == "":
 		return
 
-	net.send(RoomRequest.of(RoomEvents.Ask.SAY, RoomEvents.write_say(channel_id, text)), 1)
+	net.send(RoomRequest.new(RoomEvents.Ask.SAY, RoomEvents.write_say(channel_id, text)), 1)
 
 
 ## Client side: ask for something to be put in the room.
@@ -945,7 +945,7 @@ func ask_to_place(prop_id: StringName, at: Vector2, rotation: float = 0.0) -> vo
 		return
 
 	net.send(
-		RoomRequest.of(
+		RoomRequest.new(
 			RoomEvents.Ask.PLACE_PROP, RoomEvents.write_place_prop(index, at, rotation)
 		),
 		1
@@ -957,7 +957,7 @@ func ask_to_undo() -> void:
 	if net == null or net.is_server:
 		return
 
-	net.send(RoomRequest.of(RoomEvents.Ask.UNDO_PROP), 1)
+	net.send(RoomRequest.new(RoomEvents.Ask.UNDO_PROP), 1)
 
 
 # --- Events, inbound -------------------------------------------------------
@@ -1165,7 +1165,7 @@ func ask_for_room() -> void:
 	if net == null or net.is_server:
 		return
 
-	net.send(RoomRequest.of(RoomEvents.Ask.READY), 1)
+	net.send(RoomRequest.new(RoomEvents.Ask.READY), 1)
 
 
 func _on_request(message: DotNetMessage) -> void:

@@ -213,6 +213,15 @@ func _build_spawns() -> void:
 	# Nobody is an enemy in a lobby, so the only thing worth scoring is how far a new
 	# arrival is from everybody already standing about — which stops four people who
 	# joined at once from being placed on top of each other.
+	#
+	# [b]FURTHEST, not the deathmatch preset's RANDOM, and the difference was the whole
+	# of what this block claimed.[/b] RANDOM never reads `enemies_fn`, so the scoring
+	# below was supplied and consulted by nothing: of eight people joining an empty room,
+	# the sixth and the eighth were put exactly on top of the first while two of the eight
+	# seats were never used — and `tools/screenshot.sh` drew two nameplates printed over
+	# each other, which is how it was found. FURTHEST takes the seat whose nearest
+	# occupant is furthest away, ties broken by seat id, so it is deterministic as well.
+	spawns.rules.mode = DotSpawnRules.Mode.FURTHEST
 	spawns.enemies_fn = _occupant_positions
 	add_child(spawns)
 

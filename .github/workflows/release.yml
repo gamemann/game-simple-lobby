@@ -19,6 +19,12 @@ jobs:
     validate:
         uses: modcommunity/dot-ci/.github/workflows/validate.yml@v1
         with:
+            # Named, because auto-detection takes only examples/headless_* and this game's
+            # two most important suites are not called that: `dedicated` (a real server and
+            # the module) and `sandbox` (a real server and two real clients over real
+            # sockets, which CLAUDE.md calls the one that matters). Left to detection, CI ran
+            # four suites and neither of those.
+            suites: 'examples/headless_room examples/headless_stack examples/headless_presentation examples/headless_net examples/dedicated examples/sandbox'
             suite-timeout: 900
         secrets:
             DEPS_TOKEN: ${{ secrets.DOT_DEPS_TOKEN }}

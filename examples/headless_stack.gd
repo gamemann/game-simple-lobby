@@ -1,5 +1,6 @@
 extends Node
 
+const RoomContent := preload("../game/room_content.gd")
 const RoomPlayerStack := preload("../game/room_player_stack.gd")
 const RoomWorld := preload("../game/room_world.gd")
 
@@ -22,7 +23,7 @@ const RoomWorld := preload("../game/room_world.gd")
 ##   written there would be everybody's. The class is a choice to carry into the match
 ##   that will use it, which is what a lobby is for.
 
-const CHECKS := 23
+const CHECKS := 24
 const SECTIONS := 4
 
 var _passed := 0
@@ -232,6 +233,28 @@ func _test_seats() -> void:
 			first.state.position.distance_to(second.state.position) > 0.5,
 			"and they are not standing in the same place"
 		)
+
+	# And a room's worth of them, which is where the preset's RANDOM mode gave itself
+	# away: it never reads `enemies_fn`, so the sixth and eighth arrivals in an empty room
+	# landed exactly on the first. Two arrivals cannot show that — seven of eight seats
+	# are free for the second one whatever the mode.
+	for id in range(100, 116):
+		var _in := _world.add_occupant(id, "p%d" % id)
+
+	var everybody := _world.roster()
+	var closest := INF
+
+	for i in everybody.size():
+		for j in range(i + 1, everybody.size()):
+			closest = minf(
+				closest, everybody[i].position().distance_to(everybody[j].position())
+			)
+
+	_check(
+		closest >= RoomContent.OCCUPANT_RADIUS * 2.0,
+		"and %d arrivals in a row stand clear of each other (closest %.1f apart)"
+			% [everybody.size(), closest]
+	)
 
 	_world.queue_free()
 

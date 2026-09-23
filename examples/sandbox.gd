@@ -208,6 +208,10 @@ func _build_server(server_side: Node) -> bool:
 	config.hibernate_when_empty = false
 	config.startup_config = ""
 	config.autoexec_config = ""
+	# A self-test takes no commands. The console's stdin reader blocks in a read nothing
+	# can wake, so on an open pipe that never closes — `sleep 130 | godot ...`, measured —
+	# this suite printed "62 passed, 0 failed" and then never exited.
+	config.stdin_console_enabled = false
 
 	_server = DotServer.new()
 	_server.name = "Server"
@@ -235,6 +239,9 @@ func _build_server(server_side: Node) -> bool:
 
 	if not _check(loaded.ok, "the room loads", str(loaded.error)):
 		return false
+
+	# Into this run's own directory rather than the store a real server enforces.
+	RoomModule.punishments_path = "%s/punishments.json" % SERVER_DIR
 
 	var module: DotResult = await _server.modules.load_module(
 		"res://game/room_module.gd"

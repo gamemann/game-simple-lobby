@@ -44,6 +44,17 @@ var services: RoomServices = null
 ## be a lobby that forgets its furniture every time an operator types a command.
 var props: RoomProps = null
 
+## Where the services write punishments. [RoomServices.PUNISHMENTS_PATH] unless a host
+## says otherwise before the module loads.
+##
+## [b]Static, because the host never holds this module before it exists[/b]: dot-server
+## instantiates it from a path inside `load_module`, so there is no instance to set a
+## field on first. [member RoomServices.punishments_path] has always said it was
+## "overridable so a test does not write to a real one", and nothing between a suite and
+## the services could reach it — `examples/dedicated.tscn` wrote a test gag into the real
+## `user://room_punishments.json` on every run, 61 of them by the time anybody counted.
+static var punishments_path: String = RoomServices.PUNISHMENTS_PATH
+
 ## userid -> true, for everybody this module put in the room.
 var _joined: Dictionary = {}
 
@@ -263,7 +274,9 @@ class RoomQueryProvider extends DotQueryProvider:
 		return "room"
 
 	func _contribute(snapshot: DotQuerySnapshot) -> void:
-		if module == null or module.world == null:
+		# `is_instance_valid` rather than null: a query can arrive between a game change
+		# freeing the scene and the module moving onto the next one.
+		if module == null or module.world == null or not is_instance_valid(module.world):
 			return
 
 		var world: RoomWorld = module.world
@@ -322,6 +335,60 @@ func _module_unload() -> void:
 
 	if net != null and is_instance_valid(net):
 		net.stop()
+
+
+## Moves everything that held the old world onto the one the new game brought.
+##
+## Called by [DotModuleHost] after [DotGameManager] has swapped the scene. [b]This module
+## was written to outlive a game change — the netcode, the props and the services are all
+## its own for that reason — and until this override existed nothing moved it.[/b]
+## [method RoomBridge.rebind] was documented as what a game change does and had no caller,
+## so on any server that keeps its modules loaded across a `changegame` the bridge kept
+## the freed world: [method RoomBridge.live_world] answered null, [method _physics_process]
+## returned early on every frame, and the room froze with everybody still in it.
+## `examples/dedicated.tscn`'s "a game change" section is what says it moves now.
+func _module_game_changed(content_key: String) -> void:
+	var next := DotRegistry.get_node_service(RoomWorld.SERVICE) as RoomWorld
+
+	if next == null:
+		# A different game with no room in it. The module goes idle rather than failing:
+		# everything that reads the world goes through `live_world()` and finds nothing,
+		# and the next change back to a room rebinds from here.
+		log_info("the new game has no room; the lobby is idle", {"content_key": content_key})
+		world = null
+
+		if services != null:
+			services.world = null
+
+		return
+
+	if next == world:
+		return
+
+	world = next
+
+	# Everything that holds a world holds the new one, before the bridge repopulates it —
+	# `rebind` re-adds everybody, and the first tick after it resolves them against the
+	# props the world is told about here.
+	world.props = props
+
+	if props != null:
+		props.rebind_world(world)
+
+	if services != null:
+		services.world = world
+
+	var rebound := bridge.rebind(world)
+
+	if not rebound.ok:
+		log_warn("could not move the room onto the new world", {
+			"content_key": content_key, "error": str(rebound.error),
+		})
+		return
+
+	log_info("the room moved onto a new world", {
+		"content_key": content_key, "occupants": world.occupant_count(),
+	})
 
 
 func _build_netcode() -> DotResult:
@@ -398,6 +465,7 @@ func _build_services() -> DotResult:
 	services.world = world
 	services.server = server
 	services.service_scope = world.service_scope
+	services.punishments_path = punishments_path
 	add_child(services)
 
 	var ready := services.setup()
@@ -455,6 +523,12 @@ func _on_client_spawn(event: DotEvent) -> void:
 		return
 
 	if _joined.has(session.userid):
+		return
+
+	# Nobody can be admitted to a room that is not there: between a game change freeing
+	# the scene and [method _module_game_changed] — or for as long as the game running is
+	# not a room at all — `world` is freed or null.
+	if bridge.live_world() == null:
 		return
 
 	# The session id, not the peer id: a peer id is reassigned on reconnect and the next
@@ -748,16 +822,35 @@ func _on_player_chat(event: DotEvent) -> void:
 
 # --- Commands --------------------------------------------------------------
 
+## The world, or null with the operator told why. The commands outlive a game change and
+## the world does not; see [method RoomBridge.live_world].
+func _world_for(ctx: DotCmdContext) -> RoomWorld:
+	var live := bridge.live_world() if bridge != null and is_instance_valid(bridge) else null
+
+	if live == null:
+		ctx.reply("There is no room running.")
+
+	return live
+
+
 func _cmd_status(ctx: DotCmdContext) -> void:
-	ctx.reply_lines(world.describe_lines())
+	var live := _world_for(ctx)
+
+	if live != null:
+		ctx.reply_lines(live.describe_lines())
 
 
 func _cmd_who(ctx: DotCmdContext) -> void:
+	var live := _world_for(ctx)
+
+	if live == null:
+		return
+
 	var now := int(Time.get_unix_time_from_system())
 
 	ctx.reply("%-6s %-22s %-9s %s" % ["id", "name", "here for", "at"])
 
-	for occupant in world.roster():
+	for occupant in live.roster():
 		ctx.reply("%-6d %-22s %6ds   %6.0f,%6.0f" % [
 			occupant.id,
 			occupant.display_name,
@@ -829,6 +922,16 @@ func _punish(ctx: DotCmdContext, kind: DotPunishment.Kind, verb: String) -> void
 		ctx.reply("Usage: %s <who> <seconds, 0 for permanent> [reason]" % ctx.command)
 		return
 
+	# Read before anybody is looked up, so a typo is answered as a typo.
+	var seconds := parse_seconds(ctx.args[1])
+
+	if seconds < 0:
+		ctx.reply(
+			"'%s' is not a length. Seconds, or 30s / 10m / 2h / 7d; 0 or perm for permanent."
+				% ctx.args[1]
+		)
+		return
+
 	var targets := server.find_sessions(ctx.args[0], ctx.session)
 
 	if targets.is_empty():
@@ -845,7 +948,6 @@ func _punish(ctx: DotCmdContext, kind: DotPunishment.Kind, verb: String) -> void
 		return
 
 	var session := targets[0]
-	var seconds := maxi(0, ctx.arg_int(1))
 	var reason := ctx.rest(2) if ctx.args.size() > 2 else "No reason given."
 
 	var issued: DotResult = await services.moderation.issue(
@@ -875,6 +977,27 @@ func _punish(ctx: DotCmdContext, kind: DotPunishment.Kind, verb: String) -> void
 	)
 
 
+## A punishment's length from what an operator typed, in seconds, or -1 for nonsense.
+##
+## [b]Refusing is the whole point.[/b] This read `ctx.arg_int(1)`, which answers anything
+## that is not an integer with its default of 0 — and 0 is PERMANENT. So `room_gag ada 10m`,
+## and `room_gag ada spamming` with the length forgotten, both issued a permanent gag
+## against the account uid, which outlives the session by design and is the one mistake
+## in this file that follows somebody home.
+##
+## A bare number stays seconds, because that is what the usage line has always said. A
+## suffix goes through [method DotBanManager.parse_duration], dot-server's own reader, so
+## `10m` means here what it means to dot-server's own `ban`.
+static func parse_seconds(text: String) -> int:
+	var s := text.strip_edges()
+
+	if s.is_valid_int():
+		var n := s.to_int()
+		return n if n >= 0 else -1
+
+	return DotBanManager.parse_duration(s)
+
+
 func _cmd_unpunish(ctx: DotCmdContext) -> void:
 	if ctx.args.is_empty():
 		ctx.reply("Usage: room_unpunish <who>")
@@ -884,6 +1007,14 @@ func _cmd_unpunish(ctx: DotCmdContext) -> void:
 
 	if targets.is_empty():
 		ctx.reply("Nobody matches '%s'." % ctx.args[0])
+		return
+
+	# Refused for the reason [method _punish] refuses: a name prefix that matches four
+	# people lifted everything against whichever of them happened to be first.
+	if targets.size() > 1:
+		ctx.reply("'%s' matches %d people. Be more specific." % [
+			ctx.args[0], targets.size()
+		])
 		return
 
 	var session := targets[0]

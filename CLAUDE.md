@@ -198,20 +198,11 @@ game's whole reason for existing. Both numbers come from the thing that owns the
 `RoomWorld.occupant_count()` and `DotTeamRoster.counts()` — rather than from a tally kept
 beside them.
 
-## Delivered, not shipped — and the one thing that stops it
+## Delivered, not shipped
 
-`tools/publish_room.tscn` packages `game/` and `scenes/` into a signed dot-cloud pack:
-25 files, a `manifest.json` and a content-addressed `objects/` tree that drops behind any
-web server. `RoomModule.game_descriptor(manifest_url)` then produces the relative-path
-shape a generic shell mounts and instantiates.
+`tools/publish_room.tscn` packages `game/` and `scenes/` into a signed dot-cloud pack: a `manifest.json` and a content-addressed `objects/` tree that drops behind any web server. `RoomModule.game_descriptor(manifest_url)` then produces the relative-path shape a generic shell mounts and instantiates.
 
-**And the pack does not work yet, which the tool says out loud rather than hiding.**
-A mounted pack's `class_name` globals are not registered in the host — measured, and in the
-family's own CLAUDE.md — so every cross-file type reference inside it fails to compile:
-the pack mounts, the scenes load, and every script in it is dead. `preload` and
-`extends "res://..."` by path both work. Converting this game to paths is what makes it
-deliverable; the pack is produced anyway so the publishing half can be checked before that
-work, and the warning is printed on every run so nobody discovers it from a black screen.
+A mounted pack's `class_name` globals are not registered in the host — measured, and in the family's own CLAUDE.md — so every script here reaches its neighbours by relative `preload`, and `RoomPaths.rebase()` wraps every `res://` string that names one of this game's own files. **The tool checks the staged files and refuses to publish if any declares a `class_name`.** It used to print "every script in this game uses `class_name`" unconditionally, on every run, for as long after the conversion as before it — a warning that is always printed is one nobody reads, which is the worst state for the one warning that means a pack will mount dead.
 
 ## The room has furniture, and it is in `RoomContent` for the same reason its size is
 
@@ -412,20 +403,32 @@ peer from the ready set after telling the world, and telling the world fires
 ID" in the log of every single disconnect — which is where somebody looks when something
 else is wrong.
 
+**Here — the module was never moved onto the next world.** It was built to outlive a game change — the netcode, the props and the services are all its own for that reason — and `RoomBridge.rebind` was written and documented as what a game change does. Nothing called it: `DotModuleHost` calls `_module_game_changed` and this module did not override it. So on any server that keeps its modules loaded across a `changegame`, the bridge held the freed world, `live_world()` answered null, the tick returned early on every frame and the room froze with everybody still in it; `room_status` died on a freed object while the console reported success, and the next person to connect reached `add_occupant` on the freed world. `rebind` itself had never run either, and read the freed world twice — so it keeps each occupant's name now rather than asking a scene that is gone. `dedicated`'s **a game change** section is what says it works: six of its checks failed before.
+
+**Here — the seat chooser never read the seats.** `RoomPlayerStack` handed dot-spawn an `enemies_fn` so that people who arrive together are spread out, on top of `DotSpawnRules.deathmatch()`, whose mode is `RANDOM` — which never consults `enemies_fn`. Of eight arrivals in an empty room the sixth and eighth stood exactly on the first while two seats went unused. It is `FURTHEST` now, and `RoomWorld` falls back to the arena's scatter once the eight seats are taken, because past that the best seat is always somebody's. Found by `tools/screenshot.sh`: two nameplates printed over each other.
+
+**Here — a punishment length that was not a number was permanent.** `room_gag ada 10m` read the length with `arg_int`, whose default for anything that is not an integer is 0, and 0 is permanent — against a uid that outlives the session on purpose. `RoomModule.parse_seconds` refuses what it cannot read, keeps a bare number as seconds, and takes `10m` / `2h` / `perm` the way dot-server's own commands do. `room_unpunish` also refuses a name that matches more than one person now, as `room_gag` always did.
+
+**Here — the prop palette sat on the chat entry.** Centred on the window, it started at 387 px on this project's own 1280 × 720 window, and the entry runs to 476. It starts beside the chat column now. A frame found it; every `Control` involved had a size and a position.
+
 ## The suites, and which one matters
 
 ```bash
-tools/check.sh                # all four, after a parse pass
+tools/check.sh                # every suite ci.yml names, after a parse pass
 ```
 
 | | | |
 | --- | --- | --- |
 | `headless_room` | 56 | the room alone. Membership, walls, and two worlds replaying the same commands bit-identically |
-| `headless_stack` | 23 | the player layer: the collision layout, the two sides, the class as a choice nothing applies, and the ring of seats |
+| `headless_stack` | 24 | the player layer: the collision layout, the two sides, the class as a choice nothing applies, and the ring of seats — filled past eight, because two arrivals cannot tell a seat chooser from a coin |
 | `headless_presentation` | 74 | settings, audio, effects, the console and the party — **none of which `headless_room` can reach**, because that one is `RoomWorld` alone and has no client in it |
 | `headless_net` | 65 | every encoder against its decoder, then a session over a lossy delaying loopback, then a walk into the furniture |
-| `dedicated` | 86 | a real `DotServer`, a real module, a real WebSocket listener, and the props, chat, voice, moderation and identity halves |
+| `dedicated` | 116 | a real `DotServer`, a real module, a real WebSocket listener, and the props, chat, voice, moderation and identity halves — and a game change under the loaded module, to another room, to a game that is not one, and back |
 | `sandbox` | 62 | **a real server and two real clients, over real sockets, in one process** — chat, props and voice all cross a wire here and nowhere else |
+
+**The list of suites lives in `.github/workflows/ci.yml` and nowhere else.** `tools/check.sh` reads its `suites:` line and fails if `release.yml`'s differs. Before that, check.sh carried its own list, which had lost `headless_stack`, and CI auto-detected `examples/headless_*` — so neither `dedicated` nor `sandbox`, the two that run a real server, ever ran in CI.
+
+**Both server suites turn dot-server's stdin console off**, because its reader thread blocks in a read nothing can wake: on an open pipe that never closes (`sleep 130 | godot ...`, or a CI step), `sandbox` printed "62 passed, 0 failed" and then never exited. **And both write punishments into their own directory** through `RoomModule.punishments_path` — `dedicated` had been writing a test gag into the real `user://room_punishments.json` on every run, 61 of them by the time anybody counted.
 
 **`sandbox` is the one that matters and the slowest to write.** It is the only place
 dot-server's signon, the RPC node paths, dot-server's chat and this game's netcode run at
@@ -620,9 +623,6 @@ The server still tells its clients what is carrying chat — `RoomServices` poin
   `DotScreen` over it is the missing half. Deliberate, because the thing worth proving was
   that a server decides what is legal without loading anything, and a screen does not
   change that.
-- **A `class_name`-free build.** The pack publishes and would mount dead; see the section
-  above. It is a mechanical change to every file in `game/` and it is the last thing
-  between this and being genuinely delivered rather than shipped.
 - **A Host button.** A browser tab cannot listen, and offering a control that fails on the
   platform this game exists for is worse than not offering it.
 - **Any actual audio files.** The catalogue is written and there are still no files behind it. That is the right way round — what this game was missing was never the files but the decision about what is audible, how many at once and how loud, which is a document and is `RoomPresentation.sound_catalogue()`. It is not silent any more: `sound_recipes()` gives each of the five ids a `DotAudioSynth` voice and the sink falls through to it when a path resolves to nothing. Everything a lobby makes a noise about is somebody *else* doing something, so all five are short and quiet by design — a room you sit in for twenty minutes is the one place in this family where an over-eager sound is something people mute the tab for. Dropping five `.ogg` files into `audio/` changes nothing else.

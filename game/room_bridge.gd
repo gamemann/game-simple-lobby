@@ -92,6 +92,12 @@ var _entities: Node = null
 var _occupant_of_peer: Dictionary = {}
 var _peer_of_occupant: Dictionary = {}
 
+## occupant id -> the name they were admitted under, as the world stored it. Server side.
+##
+## Kept here because the bridge outlives the world and the world is the only other thing
+## that knows it: [method rebind] runs after the old scene has been freed.
+var _name_of_occupant: Dictionary = {}
+
 ## Peers that have said they can receive.
 ##
 ## [b]Nothing may be sent to a peer before it says so.[/b] dot-server's signon finishes
@@ -186,18 +192,23 @@ func rebind(new_world: RoomWorld) -> DotResult:
 			DotError.CODE_INVALID, "A bridge rebinds onto an authoritative world."
 		)
 
-	# Who is here, before the old world goes. The peer map survives a game change; the
-	# occupants do not, and their names are the only thing in them worth carrying across.
+	# Who is here. The peer map survives a game change; the occupants do not, and their
+	# names are the only thing in them worth carrying across.
+	#
+	# [b]Out of [member _name_of_occupant], never out of the old world.[/b] This runs after
+	# [DotGameManager] has freed the old scene, so `world` is a freed object that is not
+	# null and cannot be asked who anybody was — reading it was a use-after-free, and
+	# falling back to "Player 5151" put a number over everybody's head after every change.
+	var old_world := live_world()
 	var carried: Array[Dictionary] = []
 
 	for peer_key in _occupant_of_peer.keys():
 		var occupant_id := int(_occupant_of_peer[peer_key])
-		var occupant := world.occupant_for(occupant_id) if world != null else null
 
 		carried.append({
 			"peer": int(peer_key),
 			"occupant": occupant_id,
-			"name": occupant.display_name if occupant != null else "Player %d" % occupant_id,
+			"name": str(_name_of_occupant.get(occupant_id, "Player %d" % occupant_id)),
 		})
 
 	for occupant_id in _behaviours.keys():
@@ -206,9 +217,9 @@ func rebind(new_world: RoomWorld) -> DotResult:
 	_behaviours.clear()
 	_commands.clear()
 
-	if world != null:
-		world.occupant_joined.disconnect(_on_occupant_joined)
-		world.occupant_left.disconnect(_on_occupant_left)
+	if old_world != null:
+		old_world.occupant_joined.disconnect(_on_occupant_joined)
+		old_world.occupant_left.disconnect(_on_occupant_left)
 
 	world = new_world
 	world.occupant_joined.connect(_on_occupant_joined)
@@ -339,6 +350,7 @@ func add_occupant(
 
 		return added
 
+	_name_of_occupant[occupant_id] = (added.value as RoomOccupant).display_name
 	return added
 
 
@@ -374,6 +386,7 @@ func remove_peer(peer_id: int) -> void:
 			live.remove_occupant(occupant_id)
 
 		_peer_of_occupant.erase(occupant_id)
+		_name_of_occupant.erase(occupant_id)
 
 	# The entity is the netcode's, not the world's, so it goes whether or not the world
 	# is still there. Without this a changed game inherits the previous one's entities.

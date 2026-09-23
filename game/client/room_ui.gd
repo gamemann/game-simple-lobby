@@ -248,15 +248,21 @@ func _build() -> void:
 func _build_palette() -> void:
 	_palette = HBoxContainer.new()
 	_palette.name = "Palette"
-	_palette.anchor_left = 0.5
-	_palette.anchor_right = 0.5
+	# [b]Beside the chat column, not centred on the window.[/b] Centred, it started at
+	# half the window less half its own width — 387 px on this project's own 1280 × 720
+	# window — and the chat entry runs to MARGIN + CHAT_WIDTH = 476, so the Bench and
+	# Crate buttons sat on top of the line people type into, at 1920 as well. Nothing
+	# measured it: every Control had a size and a position. A frame did.
+	_palette.anchor_left = 0.0
+	_palette.anchor_right = 0.0
 	_palette.anchor_top = 1.0
 	_palette.anchor_bottom = 1.0
-	_palette.offset_left = -300.0
-	_palette.offset_right = 300.0
+	_palette.offset_left = MARGIN * 2.0 + CHAT_WIDTH
+	_palette.offset_right = MARGIN * 2.0 + CHAT_WIDTH
 	_palette.offset_top = -(MARGIN + 34.0)
 	_palette.offset_bottom = -MARGIN
-	_palette.alignment = BoxContainer.ALIGNMENT_CENTER
+	_palette.grow_horizontal = Control.GROW_DIRECTION_END
+	_palette.alignment = BoxContainer.ALIGNMENT_BEGIN
 	add_child(_palette)
 
 	var catalogue := RoomProps.shared_catalogue()

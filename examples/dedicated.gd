@@ -80,7 +80,8 @@ func _run() -> void:
 		_test_query()
 		_test_identity()
 		_test_transport()
-		_test_unload()
+		await _test_game_change()
+		await _test_unload()
 
 	_teardown()
 	DotPaths.remove_tree(SERVER_DIR)
@@ -207,6 +208,13 @@ func _build(serving: bool) -> bool:
 	# correct layering and would make this test assert against whatever that file says.
 	config.startup_config = ""
 	config.autoexec_config = ""
+	# A self-test takes no commands, and its stdin is whatever the runner left open. The
+	# console's reader thread blocks in `read_string_from_stdin`, which nothing can wake,
+	# and on an open pipe that never closes — `sleep 60 | godot ...`, or a CI step — the
+	# process printed its whole result and then never exited. A tty and /dev/null both
+	# exit, which is why it only showed once the suite ran long enough for the reader to
+	# be blocked by the time it quit. `--serve` keeps it, because that one is a server.
+	config.stdin_console_enabled = serving
 	# The query listeners. A lobby is the server in this family a person is most likely to
 	# be choosing off a list, and this game has shipped `RoomBrowser` against a server that
 	# answered nothing at all.
@@ -260,6 +268,12 @@ func _build(serving: bool) -> bool:
 
 	if not _check(platform.ok, "the platform module loads", str(platform.error)):
 		return false
+
+	# Into this run's own directory, which is deleted on the way in and out. The default
+	# is the store a `--serve` of this same scene enforces, and a self-test gag written
+	# there is a real record against a real (if made-up) uid.
+	if not serving:
+		RoomModule.punishments_path = "%s/punishments.json" % SERVER_DIR
 
 	var module: DotResult = await _server.modules.load_module(
 		"res://game/room_module.gd"
@@ -347,7 +361,42 @@ func _test_commands() -> void:
 	for command in ["room_status", "room_who", "room_net"]:
 		_check(_server.console.execute(command).ok, "%s runs" % command)
 
+	# A punishment's length. `arg_int` answered every non-integer with 0, and 0 is
+	# permanent: `room_gag ada 10m` gagged somebody for ever, against a uid that outlives
+	# their session on purpose.
+	var lengths := {
+		"90": 90, "0": 0, "10m": 600, "2h": 7200, "perm": 0,
+		"10x": -1, "spamming": -1, "-5": -1,
+	}
+
+	for typed: String in lengths:
+		var got := RoomModule.parse_seconds(typed)
+		_check(
+			got == int(lengths[typed]),
+			"a punishment typed as '%s' lasts %d (%d)" % [typed, int(lengths[typed]), got]
+		)
+
+	var said := _command_output("room_gag nobody spamming")
+	_check(
+		said.size() == 1 and said[0].contains("is not a length"),
+		"and a length that is not one is refused before anybody is looked up",
+		" / ".join(said)
+	)
+
 	_done()
+
+
+## What a console command said, line by line.
+##
+## [b]Read, rather than trusting `execute(...).ok`.[/b] A handler that dies on a freed
+## object still leaves the console reporting success — the game-change section below had
+## `room_status` pass while the engine printed a SCRIPT ERROR from inside it.
+func _command_output(line: String) -> PackedStringArray:
+	var ctx := DotCmdContext.console("", PackedStringArray())
+	var lines := PackedStringArray()
+	ctx.reply_sink = func(text: String) -> void: lines.append(text)
+	_server.console.execute(line, ctx)
+	return lines
 
 
 ## Membership, through the bridge rather than through a socket.
@@ -572,6 +621,12 @@ func _test_services() -> void:
 		"and a ban source, which dot-server's admission check consults"
 	)
 
+	_check(
+		services.punishments_path.begins_with(SERVER_DIR),
+		"into this run's own store, not the one a real server enforces (%s)"
+			% services.punishments_path
+	)
+
 	var gagged: DotResult = await services.moderation.issue(
 		DotPunishment.Kind.GAG, DotPunishmentSubject.for_uid("uid-test"),
 		"testing", "console", 60
@@ -713,6 +768,134 @@ func _test_transport() -> void:
 	_check(
 		not DotPlatform.is_web(),
 		"and this process can listen, because it is not a browser"
+	)
+	_done()
+
+
+## A game change under a loaded module: the scene goes, the module and the people stay.
+##
+## [b]The module is written to outlive the world and nothing ever moved it onto the next
+## one.[/b] [method RoomBridge.rebind] existed, was documented as what a game change does,
+## and had no caller — [DotModuleHost] calls `_module_game_changed` and this module did not
+## override it. So after any `changegame` on a server that keeps its modules loaded, the
+## module held the freed world: [method RoomBridge.live_world] answered null, the tick
+## returned early forever, and the room froze with everybody in it. The next person to
+## connect reached `add_occupant` on the freed world.
+##
+## The same scene under a second id is the change: dot-server refuses to change to the
+## game that is already running, and a second descriptor is what an operator with two
+## rooms has anyway.
+func _test_game_change() -> void:
+	_section("a game change")
+
+	var module := _module()
+	var before := _world()
+	var again := RoomModule.game_descriptor()
+	again.game_id = "simple_lobby_again"
+	_server.games.add_game(again)
+
+	var added := module.bridge.add_occupant(31, 5151, "Grace")
+	_check(added.ok, "somebody is in the room before it changes", str(added.error))
+
+	module.props.spawner.limits.spawn_interval = 0.0
+	var bench := module.props.place(5151, &"bench", Vector2(300.0, 200.0))
+	_check(bench.ok, "and has put a bench down", str(bench.error))
+
+	var changed: DotResult = await _server.games.change_game(again.game_id, "test")
+	_check(changed.ok, "the game changes", str(changed.error))
+
+	# One physics frame so the module's own tick runs against whatever it now holds.
+	await get_tree().physics_frame
+	await get_tree().physics_frame
+
+	var after := _world()
+	_check(
+		after != null and after != before,
+		"to a new world, because the scene was replaced"
+	)
+	_check(
+		module.world == after,
+		"and the module holds the new world rather than the freed one"
+	)
+	_check(
+		module.bridge.live_world() == after,
+		"and so does the bridge, so the room still ticks",
+		"a bridge left on the freed world returns early from every tick"
+	)
+
+	var tick_was := after.current_tick() if after != null else -1
+	await get_tree().physics_frame
+	await get_tree().physics_frame
+	_check(
+		after != null and after.current_tick() > tick_was,
+		"and it does tick (%d -> %d)"
+			% [tick_was, after.current_tick() if after != null else -1]
+	)
+
+	var grace := after.occupant_for(5151) if after != null else null
+	_check(grace != null, "the person in the room is in the new one too")
+	_check(
+		grace != null and grace.display_name == "Grace",
+		"under their own name rather than a placeholder (%s)"
+			% (grace.display_name if grace != null else "-")
+	)
+	_check(
+		module.bridge.behaviour_for(5151) != null,
+		"and is a replicated entity again"
+	)
+	_check(
+		after != null and after.props == module.props,
+		"the new world collides against the props the module kept"
+	)
+	_check(
+		module.props.count_for(5151) == 1,
+		"and the bench outlived the change (%d)" % module.props.count_for(5151)
+	)
+
+	var later := module.props.place(5151, &"stool", Vector2(-300.0, 200.0))
+	_check(later.ok, "a prop can be placed in the new world", str(later.error))
+	var status := _command_output("room_status")
+	_check(
+		status.size() > 0 and status[0].begins_with("room"),
+		"and room_status describes it",
+		" / ".join(status)
+	)
+
+	module.props.clear_owner(5151)
+	module.bridge.remove_peer(31)
+	_check(
+		after != null and after.occupant_count() == 0,
+		"and leaving empties the new room, not the old one"
+	)
+
+	# A game with no room in it: the module goes idle rather than holding a freed world.
+	# A real scene rather than a scene-less descriptor, because dot-server frees the
+	# running scene before it finds out a descriptor has none to load, and then never
+	# announces the change at all — see the report on dot-server, not this game.
+	var elsewhere := DotGameDescriptor.new()
+	elsewhere.game_id = "not_a_room"
+	elsewhere.scene = "res://fixtures/not_a_room.tscn"
+	_server.games.add_game(elsewhere)
+
+	var left: DotResult = await _server.games.change_game(elsewhere.game_id, "test")
+	_check(left.ok, "the server changes to a game that is not a room", str(left.error))
+	await get_tree().physics_frame
+
+	_check(module.world == null, "and the module lets go of the world")
+	var idle := _command_output("room_status")
+	_check(
+		idle.size() == 1 and idle[0].contains("no room"),
+		"and room_status says there is no room rather than reading a freed one",
+		" / ".join(idle)
+	)
+
+	var back: DotResult = await _server.games.change_game(RoomModule.GAME_ID, "test")
+	_check(back.ok, "and changes back", str(back.error))
+	await get_tree().physics_frame
+	_check(
+		module.world != null and module.world == _world()
+			and module.bridge.live_world() == module.world,
+		"and the module is holding the room again"
 	)
 	_done()
 

@@ -295,6 +295,17 @@ func setup(p_authoritative: bool, world: Node) -> DotResult:
 	return DotResult.success(null)
 
 
+## Points the prop layer at the room a game change brought with it.
+##
+## [b]The placements stay and only the host moves.[/b] The bodies were never the world's
+## (see [method setup]), so nothing here is rebuilt — but [method place] asks the world to
+## put each new body on the layout's `prop` layer, and a world freed by a `changegame` is
+## not null. Left pointing at it, every prop placed after the change landed on Godot's
+## default layer with nothing said about it.
+func rebind_world(world: Node) -> void:
+	_world = world
+
+
 func _physics_process(delta: float) -> void:
 	# The spawner's cooldown runs on simulated seconds the host advances, never on a wall
 	# clock — dot-props is explicit that a wall clock lets a player who lags the server
@@ -344,7 +355,8 @@ func place(owner_id: int, prop_id: StringName, at: Vector2, rotation: float = 0.
 	# same spot were transparent to each other while both were solid against the room. The
 	# lobby is mostly analytic (`Dot2DArena`), which makes these the only bodies here
 	# whose layers mean anything, and is why setting them is two lines.
-	if _world != null and _world.has_method("classify_prop") and instance.node != null:
+	if _world != null and is_instance_valid(_world) and _world.has_method("classify_prop") \
+			and instance.node != null:
 		_world.call("classify_prop", instance.node)
 
 	# Frozen through the physics gun's own call rather than by assigning `freeze`, because

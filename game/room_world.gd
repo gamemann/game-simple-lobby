@@ -253,14 +253,23 @@ func add_occupant(id: int, display_name: String) -> DotResult:
 	#
 	# The furniture resolve stays either way: a ring site can still land in a bench, and
 	# a lobby that puts somebody inside a pillar is broken quietly.
-	var at := arena.spawn_position(id, RoomContent.OCCUPANT_RADIUS * 4.0)
+	var spacing := RoomContent.OCCUPANT_RADIUS * 4.0
+	var at := arena.spawn_position(id, spacing)
 
 	if player_stack != null:
 		var seat := player_stack.choose_seat(id)
 
 		if seat.ok:
 			var origin := (seat.value as DotSpawnChoice).transform.origin
-			at = Vector2(origin.x, origin.y)
+			var seated := Vector2(origin.x, origin.y)
+
+			# [b]Only while the ring has a free seat.[/b] There are eight and the room holds
+			# sixty-four, so from the ninth arrival on the best seat is one somebody is
+			# already standing on — measured, every one of them landed on the same seat.
+			# The arena's scatter asks for the same spacing and is what a full ring falls
+			# back to.
+			if _nearest_occupant_distance(seated) >= spacing:
+				at = seated
 
 	var placed := RoomContent.resolve_furniture(
 		at,
@@ -281,10 +290,16 @@ func add_occupant(id: int, display_name: String) -> DotResult:
 	return DotResult.success(occupant)
 
 
-## Takes somebody out of the room.
-##
-## The signal fires before the entry is erased, so a listener can still ask who left —
-## which is the entire content of a leave notification.
+## How far [param at] is from the nearest person already in the room, or INF.
+func _nearest_occupant_distance(at: Vector2) -> float:
+	var nearest := INF
+
+	for key in occupants.keys():
+		var occupant: RoomOccupant = occupants[key]
+		nearest = minf(nearest, occupant.position().distance_to(at))
+
+	return nearest
+
 
 ## Puts a placed prop on the layout's `prop` layer.
 ##
@@ -299,6 +314,10 @@ func classify_prop(node: Node) -> void:
 	var _put := player_stack.classify(node, &"prop")
 
 
+## Takes somebody out of the room.
+##
+## The signal fires before the entry is erased, so a listener can still ask who left —
+## which is the entire content of a leave notification.
 func remove_occupant(id: int) -> bool:
 	var occupant := occupant_for(id)
 

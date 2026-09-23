@@ -29,9 +29,12 @@ const RoomModule := preload("../game/room_module.gd")
 ## [b]The mounted pack cannot use `class_name`.[/b] Measured, and written down in the
 ## family's own CLAUDE.md: a mounted pack's `class_name` globals are not registered in the
 ## host, so every cross-file type reference inside it fails to compile — `preload` and
-## `extends` by path both work. **This game does not satisfy that yet**, and the tool says
-## so rather than producing a pack that mounts and is entirely dead. See the warning it
-## prints, and the note in this project's CLAUDE.md.
+## `extends` by path both work. This game satisfies that now — every script in `game/`
+## reaches its neighbours by relative `preload` — and the tool **checks the staged files
+## and refuses** rather than taking it on trust. It used to print "every script in this
+## game uses `class_name`" unconditionally, on every run, for weeks after that stopped
+## being true: a warning that is always printed is one nobody reads, which is the worst
+## state for the one warning that means a pack will mount dead.
 ##
 ## A build step, not a runtime path: it hashes every file synchronously, which is right in
 ## a CLI and wrong in a frame.
@@ -80,6 +83,19 @@ func _run() -> void:
 	var staged := _stage(out_dir)
 
 	if staged == "":
+		get_tree().quit(1)
+		return
+
+	var named := class_names_in(staged)
+
+	if not named.is_empty():
+		print("  REFUSED  a mounted pack's class_name globals are not registered in the")
+		print("           host, so these scripts would mount and never compile:")
+
+		for line in named:
+			print("             %s" % line)
+
+		print("           Reach them by relative preload instead.")
 		get_tree().quit(1)
 		return
 
@@ -133,14 +149,32 @@ func _run() -> void:
 		% [PACK_ID, version])
 	print("  A client needs the public key in DotCloudConfig.trusted_keys under 'default'.")
 	print("  The public key is at %s" % public_path)
-	print("")
-	print("  WARNING: every script in this game uses `class_name`, and a mounted pack's")
-	print("  class_name globals are NOT registered in the host. This pack will mount and")
-	print("  its scripts will not compile. Converting the game to `preload` and")
-	print("  `extends \"res://...\"` by path is what makes it deliverable; the pack is")
-	print("  produced anyway so the publishing half can be checked before that work.")
 
 	get_tree().quit(0)
+
+
+## Every `class_name` declaration under [param dir], as `path: line`. Empty is deliverable.
+static func class_names_in(dir: String) -> PackedStringArray:
+	var out := PackedStringArray()
+	var access := DirAccess.open(dir)
+
+	if access == null:
+		return out
+
+	for sub in access.get_directories():
+		out.append_array(class_names_in(dir.path_join(sub)))
+
+	for file in access.get_files():
+		if not file.ends_with(".gd"):
+			continue
+
+		var path := dir.path_join(file)
+
+		for line in FileAccess.get_file_as_string(path).split("\n"):
+			if line.strip_edges().begins_with("class_name "):
+				out.append("%s: %s" % [path, line.strip_edges()])
+
+	return out
 
 
 ## Copies the room into a staging directory dot-cloud can hash.

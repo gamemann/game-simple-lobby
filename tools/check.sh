@@ -86,8 +86,27 @@ if [ "${1:-}" = "--parse" ]; then
     exit $((fails > 0))
 fi
 
-for scene in examples/headless_room examples/headless_presentation \
-             examples/headless_net examples/dedicated examples/sandbox; do
+# The suites are read out of .github/workflows/ci.yml rather than listed again here. This
+# script used to carry its own list, and it had drifted: headless_stack was missing while
+# CLAUDE.md's table counted it — and CI, left to auto-detection, ran headless_* only and
+# never dedicated or sandbox. One list, in the file CI reads, is what keeps the two runs
+# the same run. release.yml has to name them too, so it is compared rather than trusted.
+suites_in() { grep -oE "^[[:space:]]*suites: '[^']+'" "$1" | sed -E "s/^[^']*'//; s/'$//"; }
+SUITES="$(suites_in .github/workflows/ci.yml)"
+
+if [ -z "$SUITES" ]; then
+    printf '  %sFAIL%s .github/workflows/ci.yml names no suites\n' "$RED" "$OFF"
+    exit 1
+fi
+
+if [ "$(suites_in .github/workflows/release.yml)" != "$SUITES" ]; then
+    printf '  %sFAIL%s release.yml runs different suites from ci.yml\n' "$RED" "$OFF"
+    fails=$((fails + 1))
+fi
+
+# Unquoted on purpose: a space-separated list, and the split is the point.
+# shellcheck disable=SC2086
+for scene in $SUITES; do
     [ -f "$scene.tscn" ] || continue
     echo
     echo "running $scene"

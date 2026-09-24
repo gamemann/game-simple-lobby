@@ -77,6 +77,13 @@ func _initialize() -> void:
 	var seat := RoomContent.snug_seat()
 	world.occupant_for(5).state.position = Vector2(seat.x + 80.0, seat.y + 80.0)
 
+	# And one in the alcove, stood against the bow out of the lane along the wall — the
+	# spot the alcove's radius was sized to leave room for.
+	world.occupant_for(6).state.position = Vector2(
+		RoomContent.ALCOVE_X + 40.0,
+		RoomContent.ROOM_EXTENT.y - RoomContent.DOORWAY_SPAN - RoomContent.OCCUPANT_RADIUS - 8.0
+	)
+
 	# Props, placed through the real spawner, because a placement drawn from a hand-built
 	# dictionary is a picture of a dictionary. This is the one place anybody looks at what
 	# a bench, a rug and a plant actually come out as — and the family's own record here
@@ -92,7 +99,7 @@ func _initialize() -> void:
 	props.place(1, &"stool", Vector2(-420.0, 60.0))
 	props.place(2, &"plant", Vector2(250.0, -330.0))
 	props.place(2, &"lamp", Vector2(330.0, -330.0))
-	props.place(2, &"crate", Vector2(-120.0, 380.0))
+	props.place(2, &"crate", Vector2(-80.0, 250.0))
 	# The two that are not obstacles. A rug drawn at an obstacle's weight would be a rug
 	# people believe they have to walk around.
 	props.place(3, &"rug", Vector2(120.0, 300.0))

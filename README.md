@@ -59,7 +59,7 @@ tools/check.sh --parse        # the parse pass on its own
 
 | | | |
 | --- | --- | --- |
-| `examples/headless_room.tscn` | 68 | the room alone: membership, walls, every level walked, determinism |
+| `examples/headless_room.tscn` | 76 | the room alone: membership, walls, every level walked, determinism |
 | `examples/headless_stack.tscn` | 24 | the player layer: sides, classes, and the ring of seats |
 | `examples/headless_presentation.tscn` | 88 | settings, audio, effects, the console, the menus and the party, and how a client draws an admin's blind and beacon |
 | `examples/headless_net.tscn` | 84 | the wire and the netcode, over a lossy loopback, and who is told about a blind |

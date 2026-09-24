@@ -186,6 +186,12 @@ static func furniture() -> PackedVector3Array:
 	out.append_array(snug_screen())
 	out.append(snug_seat())
 
+	# --- The alcove off the south wall ---------------------------------------
+	#
+	# A bow of posts standing out from the south wall west of the island, a gate at
+	# each end of it against the wall. See [constant ALCOVE_RADIUS].
+	out.append_array(alcove_screen())
+
 	return out
 
 
@@ -428,6 +434,95 @@ static func snug_seat() -> Vector3:
 ## somebody standing there would say.
 static func in_snug(at: Vector2) -> bool:
 	return at.x > SNUG_X and at.y > SNUG_Y
+
+
+# --- The alcove ------------------------------------------------------------
+
+## Where the alcove's bow is centred, on the south wall: the x of a point ON the wall.
+##
+## [b]Placed by its neighbours, and there is one place it fits.[/b] The south-west
+## pillar is the tightest: at -200 the nearest post stands 107 from it, and at -210 that
+## gap is 100 — the front door — and past it a slot. Nudged east instead and the seat the
+## spawn ring puts at (0, 392) ends up inside the bow's east posts, so one arrival in
+## eight would be pushed out of a wall. Everything else it borders — the island, the
+## partition, the flood's start — is further off than either.
+const ALCOVE_X := -200.0
+
+## The radius of the line the bow's posts stand on, from its centre on the wall.
+##
+## [b]A lane, and somewhere to stand out of it.[/b] The gates are [constant DOORWAY_SPAN]
+## against the wall, so somebody going along the wall passes through the alcove in a lane
+## the door's width and touches nothing. At the middle the bow's inner face is 170 off
+## the wall: that lane, and 70 more behind it — room for a person (44 across) to stand
+## against the bow out of the way of whoever is walking through. 200 is the most the
+## south-west pillar leaves room for: at 218 the nearest post comes within 88 of it.
+const ALCOVE_RADIUS := 200.0
+
+## The radius of one of the bow's posts. The snug's, for the snug's reason: a screen, not
+## a wall, and its neighbours are what bound it.
+const ALCOVE_POST_RADIUS := 30.0
+
+
+## The centre of the bow: a point on the south wall.
+static func alcove_centre() -> Vector2:
+	return Vector2(ALCOVE_X, ROOM_EXTENT.y)
+
+
+## How far round from the wall each end post stands, in radians.
+##
+## [b]Derived so that the gate between an end post and the wall is exactly
+## [constant DOORWAY_SPAN][/b], the way [constant SNUG_GATE_Y] derives the snug's: the end
+## post's centre is the door's width plus its own radius off the wall. Widen the door and
+## the bow's ends draw back from the wall with it.
+static func alcove_end_angle() -> float:
+	return asin((DOORWAY_SPAN + ALCOVE_POST_RADIUS) / ALCOVE_RADIUS)
+
+
+## The bow's posts, east end first.
+##
+## [b]The count comes from the overlap, not from how it looks.[/b] The posts go at even
+## angles from end to end, and there are as many as it takes for no two neighbours to be
+## further apart than [constant GALLERY_OVERLAP] short of touching — the partition's rule,
+## for the partition's reason: two tangent circles leave a contact point
+## [method resolve_circles] can push a walker straight through. At these numbers that is
+## ten posts.
+##
+## The trigonometry is evaluated identically on both ends of a connection, because both
+## run the same build; the last-digit difference two platforms' [code]sin[/code] could
+## disagree by is fourteen orders of magnitude under the reconcile epsilon in
+## [method net_config].
+##
+## Separate from [method furniture] for [method gallery_screen]'s reason.
+static func alcove_screen() -> PackedVector3Array:
+	var out := PackedVector3Array()
+	var start := alcove_end_angle()
+	var sweep := PI - start * 2.0
+	var chord := ALCOVE_POST_RADIUS * 2.0 - GALLERY_OVERLAP
+	var step := 2.0 * asin(chord / (2.0 * ALCOVE_RADIUS))
+	var count := int(ceil(sweep / step))
+
+	for index in range(count + 1):
+		var angle := start + sweep * float(index) / float(count)
+		out.append(Vector3(
+			ALCOVE_X + cos(angle) * ALCOVE_RADIUS,
+			ROOM_EXTENT.y - sin(angle) * ALCOVE_RADIUS,
+			ALCOVE_POST_RADIUS
+		))
+
+	return out
+
+
+## Whether [param at] is inside the alcove rather than in the hall.
+##
+## Inside the bow's post line, and between its two end posts — so somebody in a gate is
+## inside once they are past the end post, which is what a person standing there would
+## say, and a point against the wall but out past either end is in the hall.
+static func in_alcove(at: Vector2) -> bool:
+	var half := cos(alcove_end_angle()) * ALCOVE_RADIUS
+	return (
+		at.distance_to(alcove_centre()) < ALCOVE_RADIUS
+		and absf(at.x - ALCOVE_X) < half
+	)
 
 
 ## Whether [param at] is in the wing behind the partition rather than in the hall.

@@ -13,7 +13,7 @@ const RoomWorld := preload("../game/room_world.gd")
 ## Exits non-zero on any failure. No netcode, no server, no rendering — this is
 ## [RoomWorld] alone, which is the only part of the game that decides anything.
 
-const CHECKS := 68
+const CHECKS := 76
 
 var _passed := 0
 var _failed := 0
@@ -48,6 +48,7 @@ func _run() -> void:
 	_test_wing()
 	_test_gallery()
 	_test_snug()
+	_test_alcove()
 	_test_reach()
 	_test_determinism()
 	_test_bubbles()
@@ -765,6 +766,127 @@ func _test_snug() -> void:
 	_done()
 
 
+func _test_alcove() -> void:
+	_section("the alcove off the south wall")
+
+	var world := _world(&"alcove")
+	world.add_occupant(1, "Stroller")
+
+	var walker := world.occupant_for(1)
+	var bow := RoomContent.alcove_screen()
+	var lane_y := RoomContent.ROOM_EXTENT.y - RoomContent.DOORWAY_SPAN * 0.5
+
+	# The bow is a wall. Straight down at its middle from the hall, which is the one
+	# direction a hole between two posts would show up as a way in.
+	walker.state.position = Vector2(RoomContent.ALCOVE_X, 200.0)
+	walker.state.velocity = Vector2.ZERO
+
+	for _i in range(600):
+		world.tick({1: _walk(Vector2.DOWN)})
+
+	_check(
+		not RoomContent.in_alcove(walker.position()),
+		"walking into the middle of the bow does not go through it (%.0f, %.0f)"
+			% [walker.position().x, walker.position().y]
+	)
+
+	# --- Along the wall, through both gates, on one held direction each way -----
+
+	# Down the middle of the lane along the wall, which is where somebody walking in
+	# without aiming is. [b]Untouched, not merely through:[/b] the lane is the door's
+	# width by derivation, so anything that pushes a walker off their line in it is a
+	# post standing in a doorway.
+	for way in [Vector2.RIGHT, Vector2.LEFT]:
+		var from := -1.0 if way == Vector2.RIGHT else 1.0
+		walker.state.position = Vector2(
+			RoomContent.ALCOVE_X + from * (RoomContent.ALCOVE_RADIUS + 60.0), lane_y
+		)
+		walker.state.velocity = Vector2.ZERO
+		var inside := false
+		var drift := 0.0
+
+		for _i in range(600):
+			world.tick({1: _walk(way)})
+			drift = maxf(drift, absf(walker.position().y - lane_y))
+
+			if RoomContent.in_alcove(walker.position()):
+				inside = true
+
+			if (walker.position().x - RoomContent.ALCOVE_X) * -from \
+					> RoomContent.ALCOVE_RADIUS + 40.0:
+				break
+
+		var out := walker.position()
+		var heading := "east" if way == Vector2.RIGHT else "west"
+		var entry := "west" if way == Vector2.RIGHT else "east"
+		_check(
+			inside and drift < 0.5,
+			"holding %s along the wall goes in at the %s gate touching nothing (%.1f off the line)"
+				% [heading, entry, drift],
+			"the gate is the door's width against the wall; a push here is a post in the lane"
+		)
+		_check(
+			not RoomContent.in_alcove(out)
+				and (out.x - RoomContent.ALCOVE_X) * -from > RoomContent.ALCOVE_RADIUS,
+			"and comes out of the %s gate into the hall (%.0f, %.0f)" % [heading, out.x, out.y],
+			"an alcove with one way out is a pocket, and one person in it is a locked door"
+		)
+
+	# --- The bow has no hole in it, and makes no slot ---------------------------
+
+	var widest := 0.0
+
+	for index in range(1, bow.size()):
+		widest = maxf(
+			widest,
+			Vector2(bow[index].x, bow[index].y).distance_to(
+				Vector2(bow[index - 1].x, bow[index - 1].y)
+			)
+		)
+
+	_check(
+		bow.size() >= 3 and widest <= RoomContent.ALCOVE_POST_RADIUS * 2.0
+			- RoomContent.GALLERY_OVERLAP + 0.01,
+		"its %d posts overlap by at least the partition's %.0f (%.1f apart at most)"
+			% [bow.size(), RoomContent.GALLERY_OVERLAP, widest],
+		"two circles that merely touch leave a point the resolve pushes a walker through"
+	)
+
+	# Walls included, for the snug's reason: both gates are against one.
+	var narrowest := INF
+	var where := ""
+	var room := RoomContent.bounds()
+
+	for piece in bow:
+		var at := Vector2(piece.x, piece.y)
+
+		for gap in [
+			room.end.y - at.y - piece.z, at.x - piece.z - room.position.x,
+			room.end.x - at.x - piece.z,
+		]:
+			if gap < narrowest:
+				narrowest = gap
+				where = "(%.0f, %.0f) to a wall" % [at.x, at.y]
+
+		for other in RoomContent.furniture():
+			if other in bow:
+				continue
+
+			var gap := at.distance_to(Vector2(other.x, other.y)) - piece.z - other.z
+
+			if gap < narrowest:
+				narrowest = gap
+				where = "(%.0f, %.0f) to (%.0f, %.0f)" % [at.x, at.y, other.x, other.y]
+
+	_check(
+		is_finite(narrowest) and narrowest >= RoomContent.DOORWAY_SPAN - 0.01,
+		"and nothing about it is narrower than the front door (%.1f against %.0f, %s)"
+			% [narrowest, RoomContent.DOORWAY_SPAN, where],
+		"its gates are the door's width by derivation; anything narrower is a slot"
+	)
+	_done()
+
+
 ## Anywhere a walker can stand, a walker can get to.
 ##
 ## [b]The other half of the question every level here has asked.[/b] The wing, the gate,
@@ -814,6 +936,7 @@ func _test_reach() -> void:
 	seen[start] = 1
 	var reached := 0
 	var reached_snug := false
+	var reached_alcove := false
 	var head := 0
 
 	while head < queue.size():
@@ -825,6 +948,9 @@ func _test_reach() -> void:
 
 		if RoomContent.in_snug(inner.position + Vector2(column, row) * STEP):
 			reached_snug = true
+
+		if RoomContent.in_alcove(inner.position + Vector2(column, row) * STEP):
+			reached_alcove = true
 
 		for step in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
 			var c: int = column + step.x
@@ -857,6 +983,7 @@ func _test_reach() -> void:
 		reached_snug,
 		"the flood from the hall gets into the snug"
 	)
+	_check(reached_alcove, "and into the alcove")
 	_check(
 		reached == total,
 		"and every point a walker fits at is one it can get to (%d of %d%s)"

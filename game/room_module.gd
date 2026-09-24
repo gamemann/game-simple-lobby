@@ -613,12 +613,20 @@ func _occupant(id: StringName) -> RoomOccupant:
 ## carried across, were gone too. [method DotModTools.respawned] is dot-moderation's own
 ## answer to "the body a handler changed is gone": what persists is applied to the new
 ## one, and everything else is switched off through its handler and forgotten.
+##
+## [b]And the return history goes, for everybody.[/b] Every position in it is a point in the
+## room that was just freed, so `return <player>` after a change teleported them to where
+## they had stood in a different map — inside a wall, or off its edge. `respawned` keeps it
+## on purpose, because in a game where a body respawns in the same map a return still means
+## something; a game change is the one case here where none of it can, and that includes
+## people who left before the change.
 func _carry_mod_tools() -> void:
 	if mod_tools == null or world == null:
 		return
 
 	for occupant in world.roster():
 		mod_tools.respawned(StringName(str(occupant.id)))
+	mod_tools.clear_history()
 
 
 ## The state an admin modifier is written into, or null — which [Dot2DAdminModifiers]

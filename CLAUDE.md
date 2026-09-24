@@ -464,7 +464,7 @@ tools/check.sh                # every suite ci.yml names, after a parse pass
 | `headless_stack` | 24 | the player layer: the collision layout, the two sides, the class as a choice nothing applies, and the ring of seats — filled past eight, because two arrivals cannot tell a seat chooser from a coin |
 | `headless_presentation` | 88 | settings, audio, effects, the console and the party — **none of which `headless_room` can reach**, because that one is `RoomWorld` alone and has no client in it |
 | `headless_net` | 84 | every encoder against its decoder, then a session over a lossy delaying loopback, then a walk into the furniture |
-| `dedicated` | 138 | a real `DotServer`, a real module, a real WebSocket listener, and the props, chat, voice, moderation and identity halves — and a game change under the loaded module, to another room, to a game that is not one, and back |
+| `dedicated` | 141 | a real `DotServer`, a real module, a real WebSocket listener, and the props, chat, voice, moderation and identity halves — and a game change under the loaded module, to another room, to a game that is not one, and back |
 | `sandbox` | 74 | **a real server and two real clients, over real sockets, in one process** — chat, props and voice all cross a wire here and nowhere else |
 
 **The list of suites lives in `.github/workflows/ci.yml` and nowhere else.** `tools/check.sh` reads its `suites:` line and fails if `release.yml`'s differs. Before that, check.sh carried its own list, which had lost `headless_stack`, and CI auto-detected `examples/headless_*` — so neither `dedicated` nor `sandbox`, the two that run a real server, ever ran in CI.

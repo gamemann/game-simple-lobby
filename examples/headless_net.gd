@@ -29,7 +29,7 @@ const CLIENT_ID := RoomOffline.CLIENT_OCCUPANT
 ## A second person, with no connection. Peer 0, and the thing peer 0 must never mean.
 const GUEST_ID := 500002
 
-const CHECKS := 77
+const CHECKS := 78
 
 var _passed := 0
 var _failed := 0
@@ -627,18 +627,34 @@ func _test_admin_is_predicted() -> void:
 	_check(float(still["worst"]) < 0.5, "and the two agree at every tick", "worst %.2f" % float(still["worst"]))
 
 	# Naive: unfrozen, with the server alone refusing to move anybody.
+	#
+	# This used to walk away without limit — 530 units over the window, and growing —
+	# because a snapshot that carried the occupant with nothing changed handed
+	# [DotNetPredictor] the client's own prediction as the server's answer. dot-net now
+	# rewinds a predicted entity to the server's whole state, so the naive freeze is an
+	# ordinary rubber band: the client predicts its lead of movement the server refuses and
+	# every snapshot pulls it back. Both halves are asserted, and the first is still what
+	# makes the shipped freeze worth checking.
 	var _thaw := Dot2DAdminModifiers.set_frozen(server_me.state, false)
 	var speed := pair.server_world.tunables.max_speed
 	pair.server_world.tunables.max_speed = 0.0
 	var naive_freeze: Dictionary = await _admin_window(pair, 60, command)
 	pair.server_world.tunables.max_speed = speed
-	print("  measured: freeze shipped worst %.2f; naive worst %.2f (%d ticks over 8)" % [
-		float(still["worst"]), float(naive_freeze["worst"]), int(naive_freeze["over"])
+	print("  measured: freeze shipped worst %.2f; naive worst %.2f (%d ticks over 8), pulled back to %.2f in the middle third and %.2f in the last" % [
+		float(still["worst"]), float(naive_freeze["worst"]), int(naive_freeze["over"]),
+		float(naive_freeze["early"]), float(naive_freeze["late"])
 	])
 	_check(
 		float(naive_freeze["worst"]) > 8.0,
-		"a server-only freeze is one the client walks out of",
-		"naive worst %.2f" % float(naive_freeze["worst"])
+		"a server-only freeze is one the client predicts its way out of: the rubber band",
+		"naive worst %.2f — if this passes quietly, the checks above prove nothing" % float(naive_freeze["worst"])
+	)
+	_check(
+		float(naive_freeze["late"]) <= float(naive_freeze["early"]) + 1.0,
+		"and one it is pulled back from, every snapshot, rather than walks away from",
+		"pulled back to %.2f in the middle third, only to %.2f in the last" % [
+			float(naive_freeze["early"]), float(naive_freeze["late"])
+		]
 	)
 
 	_done()
@@ -679,16 +695,32 @@ func _admin_window(pair: RoomOffline, ticks: int, command: Dot2DCommand) -> Dict
 
 	var worst := 0.0
 	var over := 0
+	# The SMALLEST gap in the middle and the last third of the window: the floor a client
+	# comes back to. A client pulled back every snapshot saws between that floor and its
+	# lead all window long, so the floor stays put; one that walks away has a floor that
+	# climbs with it. The worst gap cannot tell the two apart — one late snapshot on a
+	# healthy client raises it as far as a slow walk does — and the first third is left out
+	# because it holds the ticks before the client has started moving at all.
+	var early := INF
+	var late := INF
+	var ordered: Array = server_at.keys()
+	ordered.sort()
+	var third := ordered.size() / 3.0
 
-	for tick: int in server_at:
+	for index in range(ordered.size()):
+		var tick: int = ordered[index]
 		if not client_at.has(tick):
 			continue
 		var gap: float = (client_at[tick] as Vector2).distance_to(server_at[tick] as Vector2)
 		worst = maxf(worst, gap)
+		if index >= 2.0 * third:
+			late = minf(late, gap)
+		elif index >= third:
+			early = minf(early, gap)
 		if gap > 8.0:
 			over += 1
 
-	return {"worst": worst, "over": over}
+	return {"worst": worst, "over": over, "early": early, "late": late}
 
 
 func _test_second_person() -> void:

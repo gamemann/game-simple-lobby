@@ -678,7 +678,7 @@ The server still tells its clients what is carrying chat — `RoomServices` poin
 
 `dedicated`'s last section, **exiting clean**, reads every `DotNetMessage` script under `game/` as text and fails on a self-preload. It is on the source deliberately: the leak is printed by the engine after `quit()`, where no assertion can reach.
 
-**Here it was not the cause, and the leak is still open.** `dedicated` exits with 232 ObjectDB instances, 170 resources and a VariantPools page, exactly as many before the change as after (2026-09-23) — the whole-script-graph shape, held up by something else. On 2026-09-24 it was 236 and 174, on the commit before blind and beacon as well as after, so those four came from something outside this repository.
+**Here it was not the cause, but the leak is closed.** `dedicated` exited with 232 ObjectDB instances, 170 resources and a VariantPools page, exactly as many before the change as after (2026-09-23) — the whole-script-graph shape, held up by something else. The something else was scripts naming their own `class_name` inside themselves, fixed across the addons on 2026-09-24 (`[preload-leak-1]`), and b73d0df made it a check: `dedicated`'s **exiting clean, as a second process saw it** runs the suite again in a fresh process and fails on any leak line (with a deadline since cb822cd). On the 2026-09-24 nightly `dedicated` (143) and `sandbox` (81) both exited with no leak line at all, and the probe's three checks passed.
 
 ## Things deliberately not here
 

@@ -38,6 +38,9 @@ const SCHEMA_VERSION := 1
 ## a file in later changes nothing else.
 const SOUND_DIR := "res://audio"
 
+## The ping an administrator's beacon makes. See [method sound_catalogue].
+const BEACON_SOUND := &"beacon"
+
 var settings: DotSettingsManager = null
 var audio: DotAudioManager = null
 var fx: DotFxManager = null
@@ -191,7 +194,7 @@ func _on_setting_changed(key: StringName, value: Variant, _why: StringName) -> v
 
 ## What a lobby makes a noise about.
 ##
-## Five sounds, and the interesting one is `chat_message`: it has a cooldown because a
+## Six sounds, and the interesting one is `chat_message`: it has a cooldown because a
 ## room of twenty people typing is twenty notification sounds a second, which is not a
 ## busy room, it is a fire alarm.
 static func sound_catalogue() -> DotAudioCatalogue:
@@ -248,6 +251,24 @@ static func sound_catalogue() -> DotAudioCatalogue:
 	place.max_concurrent = 3
 	c.add(place)
 
+	# An administrator's beacon: a ping once a period from the beaconed person, heard by
+	# everybody. The one sound here about somebody a moderator wants the room to find, so
+	# it is the one allowed to be insistent — and it stops the moment the beacon does.
+	# Positional, so it says WHERE as well as that; reaching past the room's diagonal, so
+	# nobody in it is out of earshot. Pitched an octave under `chat_message`, which shares
+	# its voice, so a ping is never heard as somebody talking.
+	var ping := DotAudioDef.new()
+	ping.id = BEACON_SOUND
+	ping.path = "%s/beacon.ogg" % SOUND_DIR
+	ping.kind = DotAudioDef.Kind.POSITIONAL_2D
+	ping.bus = &"SFX"
+	ping.max_distance = 2400.0
+	ping.max_concurrent = 4
+	ping.priority = 45
+	ping.pitch_min = 0.5
+	ping.pitch_max = 0.5
+	c.add(ping)
+
 	return c
 
 
@@ -268,6 +289,7 @@ static func sound_recipes() -> Dictionary:
 		&"chat_message": DotAudioSynth.Voice.BLIP,
 		&"chat_whisper": DotAudioSynth.Voice.CLICK,
 		&"prop_placed": DotAudioSynth.Voice.IMPACT,
+		BEACON_SOUND: DotAudioSynth.Voice.BLIP,
 	}
 
 
@@ -474,6 +496,16 @@ func on_leave(_occupant_id: int) -> void:
 func on_prop_placed(at: Vector2) -> void:
 	audio.play_at_2d(&"prop_placed", at)
 	fx.spawn_2d(&"prop_placed", at)
+
+
+## A beacon's ripple went out from [param at]: `RoomRenderer.beacon_pulsed`, on every
+## client, for every beaconed person — the beaconed one included, who hears their own.
+## Returns the voice, or 0 when nothing played.
+func on_beacon(at: Vector2) -> int:
+	if audio == null:
+		return 0
+
+	return audio.play_at_2d(BEACON_SOUND, at)
 
 
 ## A server asked to cap something. Applied through the player's own policy.

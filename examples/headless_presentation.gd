@@ -3,8 +3,10 @@ extends Node
 const RoomMenus := preload("../game/client/room_menus.gd")
 const RoomParty := preload("../game/room_party.gd")
 const RoomPresentation := preload("../game/client/room_presentation.gd")
+const RoomRenderer := preload("../game/client/room_renderer.gd")
 const RoomServices := preload("../game/room_services.gd")
 const RoomUi := preload("../game/client/room_ui.gd")
+const RoomWorld := preload("../game/room_world.gd")
 
 ## The client half that has nothing to do with the room: settings, audio, effects, the
 ## console, and hosting for friends.
@@ -21,7 +23,7 @@ const RoomUi := preload("../game/client/room_ui.gd")
 ##
 ## Exits non-zero on any failure.
 
-const CHECKS := 74
+const CHECKS := 88
 
 var _passed := 0
 var _failed := 0
@@ -51,6 +53,7 @@ func _run() -> void:
 	await _test_escape_menu()
 
 	_test_every_sound_has_a_voice()
+	await _test_blind_and_beacon()
 
 	print("")
 	_check(
@@ -518,6 +521,142 @@ func _test_every_sound_has_a_voice() -> void:
 		"a line addressed to you arriving in the same blip as the room's traffic is a line you will miss"
 	)
 
+	_done()
+
+
+## An administrator's blind and beacon, as the client draws them.
+##
+## Who is TOLD is `headless_net`'s — the owner alone for a blind, everybody for a beacon —
+## and whether the server sets them is `dedicated`'s. This is what a client does with the
+## two flags once it has them: the ping happens once a period rather than once a frame, the
+## ring goes when the flag or the person does, and the blind covers the viewport while
+## staying under the chat. What it LOOKS like is `tools/screenshot.sh --admin`'s.
+func _test_blind_and_beacon() -> void:
+	_section("An admin's blind and beacon, drawn")
+
+	var world := RoomWorld.new()
+	world.name = "BeaconWorld"
+	world.is_authority = true
+	world.register_service = false
+	world.service_scope = &"beacon"
+	add_child(world)
+	world.setup()
+	var _a := world.add_occupant(701, "Ada")
+	var _b := world.add_occupant(702, "Bo")
+	var ada := world.occupant_for(701)
+
+	var p := RoomPresentation.new()
+	p.name = "BeaconP"
+	add_child(p)
+	p.setup()
+	var sink := p.audio.sink as DotAudioSinkNull
+	p.audio.listener_position = Vector3.ZERO
+
+	var renderer := RoomRenderer.new()
+	renderer.name = "BeaconRenderer"
+	# Stepped by hand below. Its own `_process` would advance the ripple on every frame
+	# this section awaits, and a count of pings would then depend on the frame rate.
+	renderer.set_process(false)
+	renderer.world = world
+	add_child(renderer)
+	var pings: Array[Vector2] = []
+	renderer.beacon_pulsed.connect(func(at: Vector2) -> void:
+		pings.append(at)
+		var _voice := p.on_beacon(at)
+	)
+
+	_check(
+		renderer.advance_beacons(0.1) == 0 and renderer.beaconed().is_empty(),
+		"nobody beaconed, nothing drawn and nothing heard"
+	)
+
+	ada.beacon = true
+	_check(
+		renderer.advance_beacons(0.0) == 1,
+		"a beacon pings the frame it is first seen, not a period later"
+	)
+	_check(
+		pings.size() == 1 and pings[0].is_equal_approx(ada.position()),
+		"from where the beaconed person is", str(pings)
+	)
+
+	# Sixty frames of a second: one ping, not sixty. A ping per frame is the easy bug and
+	# a fire alarm in a room somebody sits in for twenty minutes.
+	var per_second := 0
+	for _frame in range(60):
+		per_second += renderer.advance_beacons(1.0 / 60.0)
+	_check(per_second == 1, "and then once a second, not once a frame (%d)" % per_second)
+	_check(
+		renderer.beaconed() == ([701] as Array[int]),
+		"on Ada alone", str(renderer.beaconed())
+	)
+
+	sink.forget()
+	var _far := renderer.advance_beacons(RoomRenderer.BEACON_PERIOD_SEC)
+	_check(
+		sink.count_of(RoomPresentation.BEACON_SOUND) == 1,
+		"each ripple is a ping the audio layer plays"
+	)
+	var def := RoomPresentation.sound_catalogue().find(RoomPresentation.BEACON_SOUND)
+	_check(
+		def != null and def.kind == DotAudioDef.Kind.POSITIONAL_2D
+			and def.max_distance > world.arena.bounds.size.length(),
+		"positional, and heard from anywhere in the room",
+		"a ping that cut out across the room fails in the one place a beacon is for"
+	)
+
+	ada.beacon = false
+	var _off := renderer.advance_beacons(0.1)
+	_check(renderer.beaconed().is_empty(), "the ring goes the frame the flag does")
+
+	ada.beacon = true
+	var _on := renderer.advance_beacons(0.0)
+	var _gone := world.remove_occupant(701)
+	var _after := renderer.advance_beacons(0.1)
+	_check(renderer.beaconed().is_empty(), "and the frame the person leaves")
+
+	# --- the blind ---
+	var ui := RoomUi.new()
+	ui.name = "BlindUi"
+	add_child(ui)
+	await get_tree().process_frame
+
+	_check(
+		ui.blind_overlay != null and ui.get_child(0) == ui.blind_overlay,
+		"the blind is the interface's first child, so the chat and the roster draw over it"
+	)
+	_check(
+		ui.blind_overlay.mouse_filter == Control.MOUSE_FILTER_IGNORE,
+		"and lets the mouse through, so a blinded person can still click into the chat"
+	)
+
+	ui.present_blind(RoomUi.BLIND_FADE_SEC * 0.5, true)
+	var halfway := ui.blind_overlay.modulate.a
+	ui.present_blind(RoomUi.BLIND_FADE_SEC, true)
+	_check(
+		halfway > 0.0 and halfway < 1.0 and is_equal_approx(ui.blind_overlay.modulate.a, 1.0),
+		"a blind fades in rather than cutting (%.2f halfway)" % halfway
+	)
+	# The whole viewport, measured in the viewport's own coordinates. A headless viewport
+	# is 64 x 64 (docs/testing.md), which is still a size this can be equal to or not.
+	var covered := ui.blind_overlay.get_global_rect()
+	var viewport := get_viewport().get_visible_rect()
+	_check(
+		covered.position.is_equal_approx(viewport.position)
+			and covered.size.is_equal_approx(viewport.size),
+		"and covers the whole viewport", "%s against %s" % [covered, viewport]
+	)
+
+	ui.present_blind(1.0, false)
+	_check(
+		not ui.blind_overlay.visible,
+		"and lifting it hides the overlay rather than leaving a transparent rect on top"
+	)
+
+	ui.queue_free()
+	renderer.queue_free()
+	p.queue_free()
+	world.queue_free()
 	_done()
 
 

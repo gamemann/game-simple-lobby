@@ -31,6 +31,9 @@ const RoomServices := preload("../game/room_services.gd")
 const PORT := 27086
 const SERVER_DIR := "user://room_sandbox"
 
+## Every check this suite runs, section counter included. See docs/testing.md.
+const CHECKS := 74
+
 var _passed := 0
 var _failed := 0
 var _failures := PackedStringArray()
@@ -87,6 +90,7 @@ func _run() -> void:
 			await _test_two_people()
 			await _test_walking()
 			await _test_admin_over_the_socket()
+			await _test_blind_and_beacon_over_the_socket()
 			await _test_props()
 			await _test_voice()
 			await _test_leaving()
@@ -107,6 +111,15 @@ func _run() -> void:
 	for line in _failures:
 		print("  FAIL  %s" % line)
 
+	# The total the section counter cannot be. A runtime error inside a section aborts
+	# that function, and the counter is satisfied because the section had already
+	# announced itself. See docs/testing.md.
+	if _passed + _failed != CHECKS:
+		print("ERROR: %d checks ran, %d expected. A section aborted part-way." % [
+			_passed + _failed, CHECKS
+		])
+		get_tree().quit(1)
+		return
 	get_tree().quit(1 if _failed > 0 else 0)
 
 
@@ -710,6 +723,56 @@ func _test_admin_over_the_socket() -> void:
 	var _thaw: DotResult = await module.mod_tools.toggle(&"console", id, DotModTools.ACTION_FREEZE, false, 100)
 	var _off: DotResult = await module.mod_tools.toggle(&"console", id, DotModTools.ACTION_NOCLIP, false, 100)
 	await _settle(30)
+	_done()
+
+
+## An admin's blind and beacon, over the socket, between two real clients.
+##
+## `headless_net` asserts the audience over a loopback with one client; this is the same
+## question asked of two, with dot-server's signon and real RPC paths in the way, and it
+## ends at the real `RoomClient`'s own overlay rather than at a flag.
+func _test_blind_and_beacon_over_the_socket() -> void:
+	_section("an admin's blind and beacon, over the socket")
+
+	var module := _module()
+	var mine := _client.bridge.local_occupant_id
+	var id := StringName(str(mine))
+	var on_client := _client.world.occupant_for(mine)
+	var on_other := _other.world.occupant_for(mine)
+
+	if on_client == null or on_other == null:
+		for what in ["blind", "beacon", "not told", "overlay", "off"]:
+			_check(false, what, "nobody to act on")
+		_done()
+		return
+
+	var dark: DotResult = await module.mod_tools.toggle(&"console", id, DotModTools.ACTION_BLIND, true, 100)
+	var lit: DotResult = await module.mod_tools.toggle(&"console", id, DotModTools.ACTION_BEACON, true, 100)
+	_check(dark.ok and lit.ok, "the server's tools blind and beacon them", "%s / %s" % [dark.error, lit.error])
+
+	# The beacon reaching the OTHER client is what says snapshots about this person have
+	# arrived there, so the blind's absence afterwards is an absence and not a delay.
+	var told := await _until(func() -> bool: return on_client.blinded and on_client.beacon and on_other.beacon, 5.0)
+	_check(told, "their own client is blinded, and both clients draw the beacon")
+	_check(
+		not on_other.blinded,
+		"and the other client is never told they are blinded",
+		"a room that received it would know exactly who a moderator had just dealt with"
+	)
+	await _settle(20)
+	_check(
+		_client.ui.blind_overlay.visible and _client.ui.blind_overlay.modulate.a > 0.99
+			and not _other.ui.blind_overlay.visible,
+		"the blinded client's screen goes dark, and the other's does not",
+		"%.2f / %s" % [_client.ui.blind_overlay.modulate.a, _other.ui.blind_overlay.visible]
+	)
+
+	var _lift: DotResult = await module.mod_tools.toggle(&"console", id, DotModTools.ACTION_BLIND, false, 100)
+	var _unlit: DotResult = await module.mod_tools.toggle(&"console", id, DotModTools.ACTION_BEACON, false, 100)
+	_check(
+		await _until(func() -> bool: return not on_client.blinded and not on_client.beacon and not on_other.beacon, 5.0),
+		"and turning both off reaches both clients"
+	)
 	_done()
 
 

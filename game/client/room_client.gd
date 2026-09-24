@@ -212,6 +212,12 @@ func _build_view() -> void:
 	renderer = RoomRenderer.new()
 	renderer.name = "Renderer"
 	add_child(renderer)
+	# Every beacon's ping, this client's own included: somebody who has been beaconed
+	# should hear it too, which is how they know.
+	renderer.beacon_pulsed.connect(func(at: Vector2) -> void:
+		if presentation != null:
+			var _voice := presentation.on_beacon(at)
+	)
 
 	input = RoomInput.new()
 	input.name = "Input"
@@ -447,6 +453,12 @@ func _process(delta: float) -> void:
 		# the reason everything tickable in this family is explicit: `_process` does not
 		# run while a tree is paused, and a pause menu is exactly when nothing finishes.
 		presentation.present(delta, _camera.global_position if _camera != null else Vector2.ZERO)
+
+	if ui != null:
+		# The local occupant's own flag, which only this client was sent. Before the hello
+		# there is nobody local and nothing to black out.
+		var me := bridge.local_occupant() if bridge != null else null
+		ui.present_blind(delta, me != null and me.blinded)
 
 	if net != null:
 		# Every frame, not every tick: this is what turns fifteen snapshots a second into

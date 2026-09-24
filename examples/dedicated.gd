@@ -34,6 +34,9 @@ const PORT := 27085
 const APP_URL := "lobby"
 const SERVER_DIR := "user://room_dedicated"
 
+## Every check this suite runs, section counter included. See docs/testing.md.
+const CHECKS := 138
+
 var _passed := 0
 var _failed := 0
 var _failures := PackedStringArray()
@@ -101,6 +104,15 @@ func _run() -> void:
 	for line in _failures:
 		print("  FAIL  %s" % line)
 
+	# The total the section counter cannot be. A runtime error inside a section aborts
+	# that function, and the counter is satisfied because the section had already
+	# announced itself. See docs/testing.md. `--serve` runs no checks and never gets here.
+	if _passed + _failed != CHECKS:
+		print("ERROR: %d checks ran, %d expected. A section aborted part-way." % [
+			_passed + _failed, CHECKS
+		])
+		get_tree().quit(1)
+		return
 	get_tree().quit(1 if _failed > 0 else 0)
 
 
@@ -469,6 +481,43 @@ func _test_live_tools() -> void:
 	var _thaw := await _live("unfreeze Cy")
 	var _normal := await _live("speed Cy 1")
 	_check(cy.state.admin == 0, "and all three come off again", str(Dot2DAdminModifiers.words(cy.state.admin)))
+
+	# The two that are about a screen: a flag each on the occupant, on the entity the
+	# netcode sends. Who RECEIVES them is `headless_net`'s, and what they look like is
+	# `tools/screenshot.sh --admin`'s.
+	var dark := await _live("blind Cy")
+	_check(cy.blinded, "`blind Cy` blacks her screen out", " | ".join(dark))
+	await get_tree().physics_frame
+	await get_tree().physics_frame
+	var cy_net := module.bridge.behaviour_for(5353)
+	_check(cy_net != null and cy_net.net_blind, "and it is on the entity the netcode sends her")
+	var _lift := await _live("blind Cy off")
+	_check(not cy.blinded, "`blind Cy off` lifts it")
+	# A blind is a spell. dot-moderation lifts it through the same handler when the time
+	# is up, so what is checked is the flag, not the timer.
+	var _spell := await _live("blind Cy 0.2")
+	_check(cy.blinded, "`blind Cy 0.2` blinds her for a fifth of a second")
+	await get_tree().create_timer(0.4).timeout
+	_check(not cy.blinded, "and it lifts on its own when the time is up")
+	var lit := await _live("beacon Cy")
+	await get_tree().physics_frame
+	await get_tree().physics_frame
+	_check(
+		cy.beacon and cy_net != null and cy_net.net_beacon,
+		"`beacon Cy` rings her, on the entity everybody is sent", " | ".join(lit)
+	)
+	var listed := " | ".join(await _live("modtools"))
+	_check(
+		listed.contains("blind") and listed.contains("beacon")
+			and not listed.contains("draws no"),
+		"and `modtools` lists both as supported, not refused", listed
+	)
+	var _unlit := await _live("beacon Cy off")
+	_check(
+		not cy.beacon and not module.mod_tools.is_active(&"5353", DotModTools.ACTION_BEACON)
+			and not module.mod_tools.is_active(&"5353", DotModTools.ACTION_BLIND),
+		"`beacon Cy off` puts it out, and the tools' record agrees with the room"
+	)
 
 	var slay := await _live("slay Cy")
 	_check(" ".join(slay).contains("nobody can be hurt"),
@@ -882,6 +931,19 @@ func _test_game_change() -> void:
 	var bench := module.props.place(5151, &"bench", Vector2(300.0, 200.0))
 	_check(bench.ok, "and has put a bench down", str(bench.error))
 
+	# A moderator's marks on her, across the change. A lobby has no respawn and this is its
+	# "new body": `rebind` re-adds everybody, and `RoomModule._carry_mod_tools` tells the
+	# tools so. Blind and beacon are about the person and carry; noclip is about the body.
+	var tools := module.mod_tools
+	var _blind: DotResult = await tools.toggle(&"", &"5151", DotModTools.ACTION_BLIND, true)
+	var _beacon: DotResult = await tools.toggle(&"", &"5151", DotModTools.ACTION_BEACON, true)
+	var _clip: DotResult = await tools.toggle(&"", &"5151", DotModTools.ACTION_NOCLIP, true)
+	_check(
+		tools.is_active(&"5151", DotModTools.ACTION_BLIND)
+			and tools.is_active(&"5151", DotModTools.ACTION_NOCLIP),
+		"and is blinded, beaconed and noclipped"
+	)
+
 	var changed: DotResult = await _server.games.change_game(again.game_id, "test")
 	_check(changed.ok, "the game changes", str(changed.error))
 
@@ -932,6 +994,19 @@ func _test_game_change() -> void:
 		module.props.count_for(5151) == 1,
 		"and the bench outlived the change (%d)" % module.props.count_for(5151)
 	)
+
+	_check(
+		grace != null and grace.blinded and grace.beacon,
+		"and is still blinded and beaconed, which are about her rather than the room"
+	)
+	_check(
+		grace != null and not Dot2DAdminModifiers.is_noclipped(grace.state)
+			and not tools.is_active(&"5151", DotModTools.ACTION_NOCLIP),
+		"while the noclip ended with the old room, and the tools' record says so",
+		"a record that still listed it would be `modtools Grace` describing a body that is gone"
+	)
+	var _dark_off: DotResult = await tools.toggle(&"", &"5151", DotModTools.ACTION_BLIND, false)
+	var _unlit: DotResult = await tools.toggle(&"", &"5151", DotModTools.ACTION_BEACON, false)
 
 	var later := module.props.place(5151, &"stool", Vector2(-300.0, 200.0))
 	_check(later.ok, "a prop can be placed in the new world", str(later.error))

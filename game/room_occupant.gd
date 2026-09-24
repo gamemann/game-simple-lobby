@@ -52,6 +52,24 @@ var joined_at: int = 0
 var bubble_text: String = ""
 var bubble_until_ms: int = 0
 
+## An administrator's `blind`: this person's own view of the room is blacked out.
+##
+## [b]Set on the server and replicated to the OWNER ONLY[/b] (`RoomOccupantNet.net_blind`).
+## Nobody else's screen changes, so nobody else needs to know, and a flag everybody
+## received would tell the whole room who had been punished — which a moderator did not
+## ask for. `RoomUi` draws it.
+##
+## Not part of [member state], deliberately: [DotNetPredictor] rewinds and replays that,
+## and a blind is neither predicted nor a thing a replay could change. Same for the beacon.
+var blinded: bool = false
+
+## An administrator's `beacon`: a pulsing ring round this person on every screen, and a
+## ping every client hears, until it is turned off.
+##
+## Set on the server and replicated to everybody (`RoomOccupantNet.net_beacon`); drawn by
+## `RoomRenderer`, which also says when it pings.
+var beacon: bool = false
+
 
 static func create(p_id: int, p_name: String, at: Vector2) -> RoomOccupant:
 	var occupant := RoomOccupant.new()
@@ -93,6 +111,8 @@ func describe() -> Dictionary:
 		"position": state.position,
 		"speed": state.speed(),
 		"local": is_local,
+		"blinded": blinded,
+		"beacon": beacon,
 	}
 
 

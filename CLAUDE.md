@@ -31,6 +31,14 @@ dot-moderation's live tools are on this server's console and in chat, and **what
 
 **Building that found that this client had never predicted anything over a socket.** It learns its peer id from the hello, after its `DotNetManager` is set up, and dot-net's registry kept the id it was built with — so the client registered its own occupant as somebody else's and walked a round trip behind its own keyboard, while `headless_net`, whose loopback sets the id first, said "which is predicted, because it is theirs". Fixed in dot-net (the manager forwards `local_peer_id` to the registry); `sandbox` now asserts it over the socket, which is the only place it could fail.
 
+**Blind and beacon work, as two flags the client draws** (2026-09-24; refused as "no client overlay" before). `RoomOccupant.blinded` and `.beacon` are set by the handlers and replicated by `RoomOccupantNet` — `net_blind` **owner-only**, because nobody else's screen changes and a room that received it would know exactly who a moderator had just dealt with; `net_beacon` to everybody. State rather than an event, so somebody who walks in afterwards, a lost snapshot and a game change are all corrected by the next snapshot. Neither is part of `Dot2DState`: the predictor rewinds that, and neither flag is predicted. No relevance rule is needed for the beacon, unlike the 3D games, because every occupant here is already always relevant.
+
+`RoomUi.blind_overlay` is a near-black rect that fades in over a quarter of a second, sized to the viewport, and is the interface's **first** child — so the chat log, the entry and the roster still draw over it and still take the mouse. In a lobby those are how a moderator tells somebody why, and a blind that took the chat as well would be a gag nobody typed. `RoomRenderer` draws the beacon as a saturated red-orange ring outside the local player's own white one, with a ripple out to three and a half times it once a second, under everybody so it never covers a face; there is no column through walls, because nobody in a room smaller than the screen can stand behind one. The renderer keeps each ripple's phase and emits `beacon_pulsed` as each starts, which the client plays as `RoomPresentation.BEACON_SOUND` — a positional BLIP an octave under `chat_message`, reaching past the room's diagonal. The ripple and the ping come from the same phase, so on screen they cannot drift apart.
+
+**A lobby has no respawn, so a game change stands in for one.** `RoomBridge.rebind` re-adds every occupant from scratch, and nothing told the tools: a noclip or a freeze was gone with the old room while `modtools <player>` still listed it. `RoomModule._carry_mod_tools` calls `DotModTools.respawned` for everybody after a rebind, so blind and beacon (`PERSIST_ACROSS_CHANGE`) are put back on the new occupant and everything else is switched off and forgotten. `dedicated`'s **a game change** section asserts both halves and fails without the call.
+
+`dedicated` drives both through the console, including `blind Cy 0.2` lifting itself; `headless_net` asserts the audience over the lossy loopback (the client learns its own blind and not the other occupant's, and learns both beacons); `sandbox` asks the same question of two real clients and ends at the blinded client's own overlay; `headless_presentation` asserts once-a-second pings, the ring going with the flag or the person, and the overlay covering the viewport. Each was armed: dropping `to_owner_only()` failed two in `headless_net` and one in `sandbox`, a ping every frame and a blind left unsized failed three in `headless_presentation`, and removing `_carry_mod_tools()` failed two in `dedicated`. `tools/screenshot.sh --admin` renders both.
+
 Everything else is refused with a reason `modtools` prints — nobody can be hurt or die here, there is nothing to hold, and there is no gravity in a top-down room.
 
 ## Chat is dot-chat's, and there is still exactly one path
@@ -454,10 +462,10 @@ tools/check.sh                # every suite ci.yml names, after a parse pass
 | --- | --- | --- |
 | `headless_room` | 68 | the room alone. Membership, walls, every level walked by a held direction, a flood over the whole floor for sealed pockets, and two worlds replaying the same commands bit-identically |
 | `headless_stack` | 24 | the player layer: the collision layout, the two sides, the class as a choice nothing applies, and the ring of seats — filled past eight, because two arrivals cannot tell a seat chooser from a coin |
-| `headless_presentation` | 74 | settings, audio, effects, the console and the party — **none of which `headless_room` can reach**, because that one is `RoomWorld` alone and has no client in it |
-| `headless_net` | 77 | every encoder against its decoder, then a session over a lossy delaying loopback, then a walk into the furniture |
-| `dedicated` | 127 | a real `DotServer`, a real module, a real WebSocket listener, and the props, chat, voice, moderation and identity halves — and a game change under the loaded module, to another room, to a game that is not one, and back |
-| `sandbox` | 69 | **a real server and two real clients, over real sockets, in one process** — chat, props and voice all cross a wire here and nowhere else |
+| `headless_presentation` | 88 | settings, audio, effects, the console and the party — **none of which `headless_room` can reach**, because that one is `RoomWorld` alone and has no client in it |
+| `headless_net` | 84 | every encoder against its decoder, then a session over a lossy delaying loopback, then a walk into the furniture |
+| `dedicated` | 138 | a real `DotServer`, a real module, a real WebSocket listener, and the props, chat, voice, moderation and identity halves — and a game change under the loaded module, to another room, to a game that is not one, and back |
+| `sandbox` | 74 | **a real server and two real clients, over real sockets, in one process** — chat, props and voice all cross a wire here and nowhere else |
 
 **The list of suites lives in `.github/workflows/ci.yml` and nowhere else.** `tools/check.sh` reads its `suites:` line and fails if `release.yml`'s differs. Before that, check.sh carried its own list, which had lost `headless_stack`, and CI auto-detected `examples/headless_*` — so neither `dedicated` nor `sandbox`, the two that run a real server, ever ran in CI.
 
@@ -478,6 +486,8 @@ Each suite counts **sections entered against sections that ran to their last lin
 fails when they differ. A runtime error inside a section aborts that function and nothing
 says so: the checks that already ran still print ok, the ones after it never happen, and
 the total at the bottom cannot reveal a check that never ran.
+
+**And each has a `CHECKS` total too**, because the section counter cannot catch the case where a section announced itself and then aborted. `dedicated` and `sandbox` had only the section counter until 2026-09-24. Both were armed with the total one too high, and both exited 1.
 
 ## Where a game plugs in
 
@@ -511,6 +521,7 @@ the total at the bottom cannot reveal a check that never ran.
 
 ```bash
 tools/screenshot.sh          # -> screenshots/room.png, gitignored
+tools/screenshot.sh --admin  # -> room_beacon.png and room_blind.png: two beacons, then the room through a blind
 tools/screenshot_menus.sh    # -> screenshots/menu_*.png, the pause and settings screens
 ```
 
@@ -650,7 +661,7 @@ The server still tells its clients what is carrying chat — `RoomServices` poin
 
 `dedicated`'s last section, **exiting clean**, reads every `DotNetMessage` script under `game/` as text and fails on a self-preload. It is on the source deliberately: the leak is printed by the engine after `quit()`, where no assertion can reach.
 
-**Here it was not the cause, and the leak is still open.** `dedicated` exits with 232 ObjectDB instances, 170 resources and a VariantPools page, exactly as many before the change as after (2026-09-23) — the whole-script-graph shape, held up by something else.
+**Here it was not the cause, and the leak is still open.** `dedicated` exits with 232 ObjectDB instances, 170 resources and a VariantPools page, exactly as many before the change as after (2026-09-23) — the whole-script-graph shape, held up by something else. On 2026-09-24 it was 236 and 174, on the commit before blind and beacon as well as after, so those four came from something outside this repository.
 
 ## Things deliberately not here
 
@@ -666,4 +677,4 @@ The server still tells its clients what is carrying chat — `RoomServices` poin
   change that.
 - **A Host button.** A browser tab cannot listen, and offering a control that fails on the
   platform this game exists for is worse than not offering it.
-- **Any actual audio files.** The catalogue is written and there are still no files behind it. That is the right way round — what this game was missing was never the files but the decision about what is audible, how many at once and how loud, which is a document and is `RoomPresentation.sound_catalogue()`. It is not silent any more: `sound_recipes()` gives each of the five ids a `DotAudioSynth` voice and the sink falls through to it when a path resolves to nothing. Everything a lobby makes a noise about is somebody *else* doing something, so all five are short and quiet by design — a room you sit in for twenty minutes is the one place in this family where an over-eager sound is something people mute the tab for. Dropping five `.ogg` files into `audio/` changes nothing else.
+- **Any actual audio files.** The catalogue is written and there are still no files behind it. That is the right way round — what this game was missing was never the files but the decision about what is audible, how many at once and how loud, which is a document and is `RoomPresentation.sound_catalogue()`. It is not silent any more: `sound_recipes()` gives each of the six ids a `DotAudioSynth` voice and the sink falls through to it when a path resolves to nothing. Everything a lobby makes a noise about is somebody *else* doing something, so the five ordinary ones are short and quiet by design — a room you sit in for twenty minutes is the one place in this family where an over-eager sound is something people mute the tab for. The sixth, the beacon's ping, is insistent on purpose and stops when a moderator turns it off. Dropping six `.ogg` files into `audio/` changes nothing else.

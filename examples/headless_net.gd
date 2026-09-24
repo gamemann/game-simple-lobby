@@ -29,7 +29,7 @@ const CLIENT_ID := RoomOffline.CLIENT_OCCUPANT
 ## A second person, with no connection. Peer 0, and the thing peer 0 must never mean.
 const GUEST_ID := 500002
 
-const CHECKS := 78
+const CHECKS := 84
 
 var _passed := 0
 var _failed := 0
@@ -55,6 +55,7 @@ func _run() -> void:
 	await _test_prediction()
 	await _test_admin_is_predicted()
 	await _test_second_person()
+	await _test_blind_and_beacon()
 	await _test_leaving()
 	await _test_loss()
 	await _test_furniture()
@@ -778,6 +779,74 @@ func _test_second_person() -> void:
 		"and moving them on the server moves them on the client (%.0f units)"
 			% them.position().distance_to(before),
 		"a value computed and never read looks exactly like a value computed wrongly"
+	)
+	_done()
+
+
+## An administrator's blind and beacon, over a lossy delaying link.
+##
+## [b]The audience is the whole point of both.[/b] The client owns one occupant and not the
+## other. A blind is that person's screen and nobody else's, so the client must learn its
+## own and must NOT learn the other person's — a room that received it would know exactly
+## who a moderator had just dealt with. A beacon is for everybody, so it learns both.
+## Asserted on the client's own copy of each occupant, which is what its interface and its
+## renderer read. The server sets the flags directly, as `RoomModule`'s handlers do;
+## `dedicated` drives the handlers themselves through the console.
+func _test_blind_and_beacon() -> void:
+	_section("an admin's blind and beacon: who is told")
+
+	var pair := _offline(3, 0.2)
+
+	if not _check(await _joined(pair), "the session comes up"):
+		_done()
+		return
+
+	var _other := pair.server_bridge.add_occupant(0, GUEST_ID, "Other")
+	await _pump(pair, 20)
+
+	var mine := pair.client_bridge.behaviour_for(CLIENT_ID)
+	_check(
+		mine != null
+			and mine.find_var(&"net_blind").audience == DotNetVar.Audience.OWNER
+			and mine.find_var(&"net_beacon").audience == DotNetVar.Audience.EVERYONE,
+		"the blind is declared owner-only and the beacon for everybody"
+	)
+
+	var server_me := pair.server_world.occupant_for(CLIENT_ID)
+	var server_other := pair.server_world.occupant_for(GUEST_ID)
+	server_me.blinded = true
+	server_other.blinded = true
+	server_me.beacon = true
+	server_other.beacon = true
+
+	# Long enough for several snapshots through one-in-five loss.
+	await _pump(pair, 60)
+
+	var client_me := pair.client_world.occupant_for(CLIENT_ID)
+	var client_other := pair.client_world.occupant_for(GUEST_ID)
+	var their_mirror := pair.client_bridge.behaviour_for(GUEST_ID)
+
+	_check(client_me != null and client_me.blinded, "the client blacks its own screen out")
+	_check(
+		client_other != null and not client_other.blinded
+			and their_mirror != null and not their_mirror.net_blind,
+		"and is never told somebody else is blinded",
+		"received net_blind = %s" % (str(their_mirror.net_blind) if their_mirror != null else "-")
+	)
+	_check(
+		client_me != null and client_me.beacon and client_other != null and client_other.beacon,
+		"while it draws the beacon on both"
+	)
+
+	server_me.blinded = false
+	server_me.beacon = false
+	server_other.beacon = false
+	await _pump(pair, 60)
+
+	_check(
+		client_me != null and not client_me.blinded and not client_me.beacon
+			and client_other != null and not client_other.beacon,
+		"and turning them off reaches it too"
 	)
 	_done()
 

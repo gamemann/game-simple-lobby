@@ -4,6 +4,7 @@ const RoomPaths := preload("room_paths.gd")
 
 const RoomBridge := preload("room_bridge.gd")
 const RoomContent := preload("room_content.gd")
+const RoomOccupant := preload("room_occupant.gd")
 const RoomProps := preload("room_props.gd")
 const RoomServices := preload("room_services.gd")
 const RoomWorld := preload("room_world.gd")
@@ -390,6 +391,8 @@ func _module_game_changed(content_key: String) -> void:
 		})
 		return
 
+	_carry_mod_tools()
+
 	log_info("the room moved onto a new world", {
 		"content_key": content_key, "occupants": world.occupant_count(),
 	})
@@ -501,8 +504,9 @@ func _build_services() -> DotResult:
 ## one a lobby actually needs, for somebody wedged in the furniture. Those three are
 ## dot-2d's [Dot2DAdminModifiers], in the occupant's replicated state, because a server that
 ## moved somebody their own client does not know about would rubber-band them;
-## `headless_net` measures that against a naive control. Everything else is refused with a
-## reason: nobody can be hurt or die here, and there is nothing to hold.
+## `headless_net` measures that against a naive control. Blind and beacon work too, as two
+## flags on the occupant the client draws. Everything else is refused with a reason: nobody
+## can be hurt or die here, and there is nothing to hold.
 func _build_mod_tools() -> void:
 	mod_tools = DotModTools.new()
 	mod_tools.name = "ModTools"
@@ -537,6 +541,35 @@ func _build_mod_tools() -> void:
 	mod_tools.handlers[DotModTools.ACTION_SPEED] = func(id: StringName, args: Dictionary) -> DotResult:
 		return Dot2DAdminModifiers.set_speed(_occupant_state(id), float(args["scale"]))
 
+	# The two that are about a SCREEN rather than a body: one flag each on the occupant,
+	# which `RoomOccupantNet` replicates — the blind to its owner alone, the beacon to
+	# everybody — and which the client draws. The server decides; nothing about either is
+	# a client's to choose.
+	#
+	# The blind takes the room away and nothing else: the blinded person still walks, and
+	# still has the chat log, the roster and the entry, because in a lobby those are how a
+	# moderator tells them why. One who wants them to stop moving as well has freeze.
+	mod_tools.handlers[DotModTools.ACTION_BLIND] = func(id: StringName, args: Dictionary) -> DotResult:
+		var occupant := _occupant(id)
+		if occupant == null:
+			return DotResult.fail(DotError.CODE_STATE, "Nobody by that id is in the room.")
+		occupant.blinded = bool(args["on"])
+		return DotResult.success(occupant.blinded)
+	mod_tools.handlers[DotModTools.ACTION_BEACON] = func(id: StringName, args: Dictionary) -> DotResult:
+		var occupant := _occupant(id)
+		if occupant == null:
+			return DotResult.fail(DotError.CODE_STATE, "Nobody by that id is in the room.")
+		occupant.beacon = bool(args["on"])
+		return DotResult.success(occupant.beacon)
+
+	# A lobby has no respawn, and its "new body" is a game change: `RoomBridge.rebind`
+	# re-adds everybody as a fresh occupant. Blind and beacon are about the person, so they
+	# carry across it; noclip, freeze and speed are about the body in the room they were
+	# given in. See [method _carry_mod_tools].
+	for action in PERSIST_ACROSS_CHANGE:
+		if not mod_tools.persist_on_respawn.has(action):
+			mod_tools.persist_on_respawn.append(action)
+
 	var harmless := "nobody can be hurt in a lobby"
 	var refusals := {
 		DotModTools.ACTION_GRAVITY: "there is no gravity in a top-down room",
@@ -549,14 +582,43 @@ func _build_mod_tools() -> void:
 		DotModTools.ACTION_RESPAWN: "nobody dies in a lobby; bring or send moves somebody",
 		DotModTools.ACTION_GIVE: "there is nothing to hold in a lobby",
 		DotModTools.ACTION_STRIP: "there is nothing to hold in a lobby",
-		DotModTools.ACTION_BLIND: "the client draws no overlay a server could turn on",
-		DotModTools.ACTION_BEACON: "the client draws no marker a server could turn on",
 	}
 	for action: Variant in refusals:
 		mod_tools.unsupported_reasons[action] = refusals[action]
 
 	add_child(mod_tools)
 	mod_commands = DotModToolCommands.install(self, mod_tools, server)
+
+
+## Toggles that survive a game change here, beyond dot-moderation's own god and buddha
+## (which a lobby refuses anyway).
+##
+## [b]Blind and beacon are about the person, not the room they are standing in.[/b] A
+## moderator who blinded somebody or wanted the room to watch them has not changed their
+## mind because the map did — and a change is exactly what somebody being dealt with would
+## otherwise wait for to end it.
+const PERSIST_ACROSS_CHANGE: Array[String] = ["blind", "beacon"]
+
+
+## The occupant a moderator named, or null.
+func _occupant(id: StringName) -> RoomOccupant:
+	return world.occupant_for(String(id).to_int()) if world != null and String(id).is_valid_int() else null
+
+
+## Tells the live tools that everybody in the room has a new body, after a game change.
+##
+## [b]Without this the record and the room disagree.[/b] `RoomBridge.rebind` re-adds every
+## occupant from scratch, so a noclip or a freeze on the old one was gone while
+## `modtools <player>` still listed it — and a blind and a beacon, which should have
+## carried across, were gone too. [method DotModTools.respawned] is dot-moderation's own
+## answer to "the body a handler changed is gone": what persists is applied to the new
+## one, and everything else is switched off through its handler and forgotten.
+func _carry_mod_tools() -> void:
+	if mod_tools == null or world == null:
+		return
+
+	for occupant in world.roster():
+		mod_tools.respawned(StringName(str(occupant.id)))
 
 
 ## The state an admin modifier is written into, or null — which [Dot2DAdminModifiers]

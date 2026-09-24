@@ -21,18 +21,32 @@ const RoomWorld := preload("../game/room_world.gd")
 const OUT_DIR := "screenshots"
 
 const RENDERER := "res://game/client/room_renderer.gd"
+const UI := "res://game/client/room_ui.gd"
 
 var _wait := 0
 var _done := false
 var _renderer: Node2D = null
 var _framed := false
 
+## `-- --admin`: an administrator's beacon on two people, then the same room through a
+## blinded person's interface. Two frames, `room_beacon.png` and `room_blind.png`, instead
+## of `room.png`.
+var _admin := false
+var _world: RoomWorld = null
+var _ui: Control = null
+
+## Which frame is next: 0 the room (or the beacons), 1 the blind.
+var _stage := 0
+
 
 func _initialize() -> void:
 	DotLog.set_level(DotLog.Level.ERROR)
 	DirAccess.make_dir_recursive_absolute(OUT_DIR)
 
+	_admin = "--admin" in OS.get_cmdline_user_args()
+
 	var world := RoomWorld.new()
+	_world = world
 	world.is_authority = true
 	world.register_service = false
 	root.add_child(world)
@@ -112,6 +126,9 @@ func _initialize() -> void:
 	renderer.set("avatars", avatars)
 	root.add_child(renderer)
 
+	if _admin:
+		_beacons()
+
 	# The whole room in frame, with a margin. A camera that framed the bounds exactly
 	# would cut the wall line the renderer draws on the boundary itself.
 	_renderer = renderer
@@ -161,9 +178,46 @@ func _process(_delta: float) -> bool:
 		return false
 
 	var image := root.get_texture().get_image()
-	var path := OUT_DIR.path_join("room.png")
+	var file := "room.png"
+
+	if _admin:
+		file = "room_beacon.png" if _stage == 0 else "room_blind.png"
+
+	var path := OUT_DIR.path_join(file)
 	image.save_png(path)
 	print("wrote %s (%d x %d)" % [path, image.get_width(), image.get_height()])
 
+	if _admin and _stage == 0:
+		_stage = 1
+		_blind()
+		_wait = 3
+		return false
+
 	_done = true
 	return false
+
+
+## Beacons on two people, placed before the first frame: one on open floor and one in the
+## snug, because a ring that reads in the open and vanishes against the furniture is the
+## one this picture exists to catch.
+func _beacons() -> void:
+	for id in [2, 5]:
+		_world.occupant_for(id).beacon = true
+
+
+## The same room through the interface of somebody blinded: the room gone, and the chat,
+## the roster and the feed still there over it — which is the claim `RoomUi.blind_overlay`
+## makes and only a picture can check.
+func _blind() -> void:
+	var layer := CanvasLayer.new()
+	root.add_child(layer)
+
+	_ui = Control.new()
+	_ui.set_script(load(UI))
+	layer.add_child(_ui)
+
+	_ui.call("set_roster", _world.roster(), 1)
+	_ui.call("add_notice", "A moderator has blinded you.", Color(1.0, 0.6, 0.5))
+	_ui.call("set_status", "")
+	# A whole fade in one step: the frame is of a blind that is on, not of one arriving.
+	_ui.call("present_blind", 1.0, true)

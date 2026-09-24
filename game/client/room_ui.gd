@@ -97,6 +97,24 @@ var _status: Label = null
 ## right for both.
 var _was_at_bottom: bool = true
 
+## An administrator's `blind`, over the room and under the rest of this interface.
+##
+## [b]Under the widgets, on purpose, and more so here than anywhere.[/b] A blind takes the
+## room away, not the conversation: the chat log, the entry and the roster stay, because in
+## a lobby they are how a moderator tells somebody why, and how that person answers. A
+## blind that took the chat as well would be a gag nobody typed and a screen that reads as
+## a client that stopped drawing. The menus are on the same layer and above this node.
+##
+## Black rather than white. A white screen at full brightness is a thing a person can be
+## hurt by in a dark room, and taking the picture away is the whole of the point.
+var blind_overlay: ColorRect = null
+
+## Seconds a blind takes to come down and to lift. Short, so it is unmistakably on, and not
+## instant, so it reads as something done to the screen rather than a frame dropped.
+const BLIND_FADE_SEC := 0.25
+
+const BLIND_COLOUR := Color(0.01, 0.01, 0.015)
+
 
 func _ready() -> void:
 	# [b]`_and_offsets_`, not `set_anchors_preset`.[/b] The anchors alone describe how a
@@ -110,6 +128,21 @@ func _ready() -> void:
 
 
 func _build() -> void:
+	# First, so every widget added below draws over it. See [member blind_overlay].
+	blind_overlay = ColorRect.new()
+	blind_overlay.name = "Blind"
+	blind_overlay.color = BLIND_COLOUR
+	# Sized to the viewport in `present_blind` rather than anchored to this control. This
+	# control is full-rect today, but a HUD that is later inset for a safe area — dot-ui's
+	# own does exactly that — would leave a frame of the room showing round the edge, which
+	# is what the first rendered blind in game-arena did.
+	blind_overlay.set_anchors_preset(Control.PRESET_TOP_LEFT)
+	# Ignore, so a blinded person can still click into the entry and the roster.
+	blind_overlay.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	blind_overlay.modulate.a = 0.0
+	blind_overlay.visible = false
+	add_child(blind_overlay)
+
 	_feed = DotFeedView.new()
 	_feed.name = "Feed"
 	_feed.max_lines = 6
@@ -303,6 +336,29 @@ func _sync_palette() -> void:
 
 
 ## What the player has selected, or empty.
+## Fades [member blind_overlay] toward [param blinded], and keeps it over the whole viewport.
+##
+## Pushed by [RoomClient] once a frame with the local occupant's flag, rather than read off
+## a world this interface does not hold: the flag arrives in a snapshot online and is set
+## directly offline, and both end up on the same occupant. Public so a check can step it.
+func present_blind(delta: float, blinded: bool) -> void:
+	if blind_overlay == null:
+		return
+
+	var want := 1.0 if blinded else 0.0
+	blind_overlay.modulate.a = move_toward(
+		blind_overlay.modulate.a, want, maxf(delta, 0.0) / BLIND_FADE_SEC
+	)
+	blind_overlay.visible = blind_overlay.modulate.a > 0.0
+
+	if blind_overlay.visible and is_inside_tree():
+		# The whole viewport, in this control's own coordinates — whatever a safe area or
+		# an interface scale did to where it starts.
+		var inverse := get_global_transform().affine_inverse()
+		blind_overlay.position = inverse * Vector2.ZERO
+		blind_overlay.size = inverse.basis_xform(get_viewport_rect().size)
+
+
 func held_prop() -> StringName:
 	return _held
 

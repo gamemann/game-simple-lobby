@@ -52,6 +52,37 @@ var avatars: Dictionary = {}
 @export var bubble_colour: Color = Color(0.96, 0.97, 0.99, 0.94)
 @export var bubble_text_colour: Color = Color(0.08, 0.09, 0.11, 1.0)
 
+## A beacon on somebody sent out a ripple: once a period while it is on, and once the
+## moment it is first drawn. [RoomClient] plays the ping from here.
+##
+## [b]Emitted by the renderer because the renderer is what knows the ripple's phase.[/b]
+## Nothing about the picture travels — the server sends one bit per occupant — so each
+## client keeps its own phase, and the ping has to come from wherever that phase is, or
+## the sound and the ripple would drift apart on the one screen that shows both.
+signal beacon_pulsed(at: Vector2)
+
+## Seconds between ripples, and between pings.
+const BEACON_PERIOD_SEC := 1.0
+
+## How far a ripple spreads before it has faded, as a multiple of the ring.
+const BEACON_RIPPLE_SCALE := 3.5
+
+## A saturated red-orange. [method RoomContent.colour_for] can land on any hue, but always
+## at 0.55 saturation, so a fully saturated ring is never mistaken for somebody's own colour
+## even on a person whose hue is orange.
+const BEACON_COLOUR := Color(1.0, 0.30, 0.18)
+
+## How far outside a person the ring sits. Outside the local player's own white ring
+## (five pixels out), so both can be seen at once on the person who is both.
+const BEACON_GAP := 11.0
+
+## occupant id -> seconds into the current ripple, for every occupant with a beacon on.
+##
+## [b]The renderer's own state, not the world's[/b], which this file never writes to. An
+## entry is made the first frame somebody is seen beaconed and dropped the first frame they
+## are not, or have gone.
+var _beacon_phase: Dictionary = {}
+
 ## Font used for names and bubbles. Godot's default when unset.
 var _font: Font = null
 var _font_size: int = 14
@@ -62,12 +93,63 @@ func _ready() -> void:
 	_font_size = ThemeDB.fallback_font_size
 
 
-func _process(_delta: float) -> void:
+func _process(delta: float) -> void:
+	var _pinged := advance_beacons(delta)
+
 	# Redrawn every frame rather than on a signal. Everybody in the room is moving under
 	# an interpolator that produces a new position on every frame and emits nothing, so
 	# there is no signal to redraw on — and a lobby with sixty-four circles in it is not
 	# where a frame budget goes.
 	queue_redraw()
+
+
+## Moves every beacon's ripple on by [param delta], emitting [signal beacon_pulsed] for
+## each one that starts a new ripple. Returns how many did. Public so a check can step it.
+##
+## [b]A new beacon pings at once[/b]: its phase starts at the end of a period. A moderator
+## who turns a beacon on should hear it start, not a second later.
+func advance_beacons(delta: float) -> int:
+	var seen := {}
+	var pinged := 0
+
+	if world != null:
+		for occupant in world.roster():
+			if not occupant.beacon:
+				continue
+
+			seen[occupant.id] = true
+			var phase := float(_beacon_phase.get(occupant.id, BEACON_PERIOD_SEC))
+			phase += maxf(delta, 0.0)
+
+			if phase >= BEACON_PERIOD_SEC:
+				phase = fmod(phase, BEACON_PERIOD_SEC)
+				pinged += 1
+				beacon_pulsed.emit(occupant.position())
+
+			_beacon_phase[occupant.id] = phase
+
+	# Anybody whose beacon went off, or who left. Dropped rather than kept, so a beacon
+	# turned on again later starts with a ping rather than wherever the last one stopped.
+	for id in _beacon_phase.keys():
+		if not seen.has(id):
+			_beacon_phase.erase(id)
+
+	return pinged
+
+
+## Who this renderer is currently drawing a beacon on, for a check.
+func beaconed() -> Array[int]:
+	var out: Array[int] = []
+	for id in _beacon_phase.keys():
+		out.append(int(id))
+	return out
+
+
+## The fraction of a period [param occupant_id]'s ripple is through, or -1 with no beacon.
+func beacon_phase(occupant_id: int) -> float:
+	if not _beacon_phase.has(occupant_id):
+		return -1.0
+	return float(_beacon_phase[occupant_id]) / BEACON_PERIOD_SEC
 
 
 func _draw() -> void:
@@ -94,6 +176,13 @@ func _draw() -> void:
 		func(a: RoomOccupant, b: RoomOccupant) -> bool:
 			return a.position().y < b.position().y
 	)
+
+	# Every beacon before anybody is drawn, so a ripple spreading across the floor goes
+	# under the people it passes rather than over them: it is a mark on the room, and a
+	# ripple drawn over somebody's face is a ripple hiding who they are.
+	for occupant in occupants:
+		if occupant.beacon:
+			_draw_beacon(occupant)
 
 	for occupant in occupants:
 		_draw_occupant(occupant, now)
@@ -168,6 +257,30 @@ func _draw_props() -> void:
 		draw_circle(at + Vector2(0.0, radius * 0.3), radius * 0.95, Color(0, 0, 0, 0.22))
 		draw_circle(at, radius, colour)
 		draw_arc(at, radius, 0.0, TAU, 40, colour.darkened(0.35), 2.0)
+
+
+## An administrator's `beacon`: a ring round somebody that breathes, and a ripple spreading
+## out from it once a period.
+##
+## [b]A ring, not the 3D games' column through walls.[/b] The column exists because a map
+## can hide somebody behind a wall; this room is smaller than the screen and has no wall
+## anybody can stand behind, so a ring is all it takes to say "this one". Drawn from the
+## same drawn position the circle is, so it moves with the person under the interpolator
+## rather than stepping at the snapshot rate.
+func _draw_beacon(occupant: RoomOccupant) -> void:
+	var at := occupant.position()
+	var ring := occupant.state.radius + BEACON_GAP
+	var t := clampf(float(_beacon_phase.get(occupant.id, 0.0)) / BEACON_PERIOD_SEC, 0.0, 1.0)
+
+	# The ripple: out from the ring to three and a half times it, fading on a square so it
+	# is bright where it starts and gone well before it reaches anybody across the room.
+	var spread := ring * lerpf(1.0, BEACON_RIPPLE_SCALE, t)
+	var fade := (1.0 - t) * (1.0 - t)
+	draw_arc(at, spread, 0.0, TAU, 64, Color(BEACON_COLOUR, 0.85 * fade), lerpf(4.0, 1.5, t))
+
+	# The ring breathes with the ripple rather than holding still, so a beacon on somebody
+	# standing still in a busy room still reads as something alive.
+	draw_arc(at, ring, 0.0, TAU, 48, Color(BEACON_COLOUR, lerpf(0.95, 0.55, t)), 4.0)
 
 
 func _draw_grid(bounds: Rect2) -> void:

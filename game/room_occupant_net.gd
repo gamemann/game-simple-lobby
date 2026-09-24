@@ -29,6 +29,14 @@ var net_mass: int = 0
 var net_flags: int = 0
 var net_admin: int = 0
 
+# --- An administrator's marks, from RoomModule's mod-tool handlers ---
+
+## `RoomOccupant.blinded`. Owner only: see [method _register_net_vars].
+var net_blind: bool = false
+
+## `RoomOccupant.beacon`. Everybody's.
+var net_beacon: bool = false
+
 ## Newest tick whose state this behaviour has adopted. Client side, for reconciliation.
 var last_state_tick: int = -1
 
@@ -69,6 +77,19 @@ func _register_net_vars() -> void:
 
 	if position_var != null:
 		position_var.with_priority(4.0)
+
+	# [b]Per-occupant state rather than an event.[/b] Somebody who walks in after the
+	# moderator typed `beacon`, a snapshot lost on the way, a game change: each is a
+	# baseline the next snapshot corrects, where an event sent once is simply missed. Two
+	# bits, and nothing at all on a tick where neither changed.
+	#
+	# The blind goes to its owner alone. Nobody else's screen changes, and a room that
+	# received it would know exactly who a moderator had just dealt with.
+	#
+	# No relevance rule for the beacon, unlike the 3D games: every occupant here is already
+	# `always_relevant` (see `RoomBridge`), because the room is smaller than a screen.
+	replicate(&"net_blind", DotNetVar.Type.BOOL).to_owner_only()
+	replicate(&"net_beacon", DotNetVar.Type.BOOL)
 
 
 # --- Input -----------------------------------------------------------------
@@ -122,6 +143,8 @@ func pull() -> void:
 		return
 
 	Dot2DNetSync.pull(occupant.state, self)
+	net_blind = occupant.blinded
+	net_beacon = occupant.beacon
 
 	var node := identity.entity as Node2D if identity != null else null
 
@@ -141,6 +164,8 @@ func _net_state_applied(tick: int) -> void:
 
 	last_state_tick = tick
 	Dot2DNetSync.push(self, occupant.state)
+	occupant.blinded = net_blind
+	occupant.beacon = net_beacon
 
 	# The radius is not replicated and not derived from mass here: everybody in a lobby is
 	# the same size, and [method Dot2DNetSync.push] leaves it alone when no mass rules are
@@ -199,5 +224,7 @@ func describe() -> Dictionary:
 		"occupant": occupant.id if occupant != null else 0,
 		"name": occupant.display_name if occupant != null else "",
 		"position": net_position,
+		"blind": net_blind,
+		"beacon": net_beacon,
 		"state_tick": last_state_tick,
 	}

@@ -411,8 +411,8 @@ func _command_output(line: String) -> PackedStringArray:
 ##
 ## What this covers is everything downstream of admission, which is the part a socket
 ## would only slow down.
-## dot-moderation's live tools in a lobby: moving people and renaming them work, and
-## everything else is refused with the lobby's reason.
+## dot-moderation's live tools in a lobby: moving people, renaming them and the three
+## movement modifiers work, and everything else is refused with the lobby's reason.
 func _test_live_tools() -> void:
 	_section("the moderator's live tools")
 
@@ -434,7 +434,10 @@ func _test_live_tools() -> void:
 
 	var bea := _world().occupant_for(5252)
 	var cy := _world().occupant_for(5353)
-	bea.state.position = Vector2(100.0, 100.0)
+	# On open floor. (100, 100) was inside the island, so whether `return` read back exactly
+	# depended on whether a room tick — which pushes her out of it — landed inside the two
+	# frames `_live` waits: it failed on two runs in three.
+	bea.state.position = Vector2(250.0, -250.0)
 	cy.state.position = Vector2(600.0, 400.0)
 
 	var _sent := await _live("send Bea Cy")
@@ -446,11 +449,26 @@ func _test_live_tools() -> void:
 	)
 
 	var _back := await _live("return Bea")
-	_check(bea.state.position.is_equal_approx(Vector2(100.0, 100.0)),
+	_check(bea.state.position.is_equal_approx(Vector2(250.0, -250.0)),
 		"and `return Bea` puts her back exactly", str(bea.state.position))
 
 	var _renamed := await _live("rename Bea Beatrice")
 	_check(bea.display_name == "Beatrice", "`rename` reaches the roster")
+
+	# Noclip, freeze and speed are dot-2d's admin modifiers, in the occupant's replicated
+	# state; `headless_net` measures that the owning client predicts them.
+	var clipped := await _live("noclip Cy")
+	_check(Dot2DAdminModifiers.is_noclipped(cy.state), "`noclip Cy` reaches Cy's state", " | ".join(clipped))
+	var held := await _live("freeze Cy")
+	_check(Dot2DAdminModifiers.is_frozen(cy.state) and cy.state.velocity == Vector2.ZERO,
+		"`freeze Cy` holds her still", " | ".join(held))
+	var quick := await _live("speed Cy 1.4")
+	_check(is_equal_approx(Dot2DAdminModifiers.speed_of(cy.state), 1.5) and " ".join(quick).contains("1.5×"),
+		"`speed Cy 1.4` lands on the 1.5x step, and says so", " | ".join(quick))
+	var _clear := await _live("noclip Cy off")
+	var _thaw := await _live("unfreeze Cy")
+	var _normal := await _live("speed Cy 1")
+	_check(cy.state.admin == 0, "and all three come off again", str(Dot2DAdminModifiers.words(cy.state.admin)))
 
 	var slay := await _live("slay Cy")
 	_check(" ".join(slay).contains("nobody can be hurt"),

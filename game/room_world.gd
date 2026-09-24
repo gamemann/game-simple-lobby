@@ -418,6 +418,13 @@ func simulate_occupant(
 		occupant.state.position, occupant.state.radius
 	)
 
+	# An administrator's noclip is the furniture and the props not being there — and not
+	# the walls, which are the room. Here rather than around the call, because this is the
+	# function a client's replay runs: skipped on the server only, every tick inside a bench
+	# is a correction back out of it.
+	if Dot2DAdminModifiers.is_noclipped(occupant.state):
+		return
+
 	# The furniture, resolved AFTER the walls.
 	#
 	# The order matters and only in one place: somebody squeezed between a wall and a

@@ -86,6 +86,7 @@ func _run() -> void:
 			await _test_chat()
 			await _test_two_people()
 			await _test_walking()
+			await _test_admin_over_the_socket()
 			await _test_props()
 			await _test_voice()
 			await _test_leaving()
@@ -628,6 +629,87 @@ func _test_walking() -> void:
 			% (seen_by_ada.position().distance_to(on_server.position())
 				if on_server != null else -1.0)
 	)
+	_done()
+
+
+## An admin's noclip and freeze, over a real socket, on the person's own predicted body.
+##
+## `headless_net` is where this is PROVED, tick by tick, with a naive control that has to
+## diverge, over a loopback that behaves the same way twice. What only a socket reaches is
+## the rest: the console's tools on a live module, the bit riding a real snapshot, and the
+## client's own sampler driving a prediction that holds through the island. The tolerance
+## is the one "walking" already uses for agreement.
+func _test_admin_over_the_socket() -> void:
+	_section("an admin's noclip and freeze, over the socket")
+
+	var module := _module()
+	var mine := _client.bridge.local_occupant_id
+	var id := StringName(str(mine))
+	var on_server := module.world.occupant_for(mine)
+	var on_client := _client.world.occupant_for(mine)
+
+	if on_server == null or on_client == null:
+		for what in ["predicted", "noclip", "learned", "through", "agreed", "freeze", "held"]:
+			_check(false, what, "nobody to act on")
+		_done()
+		return
+
+	# Over a socket, not a loopback: the client learns its peer id from the hello, after
+	# its netcode is set up, and until dot-net forwarded that to its registry the client
+	# registered its own body as somebody else's — unpredicted, a round trip behind the
+	# keyboard, with every loopback suite (which sets the id first) saying otherwise. A
+	# freeze predicted by a client that predicts nothing is not a freeze being predicted.
+	var behaviour: Variant = _client.bridge.behaviour_for(mine)
+	_check(
+		behaviour != null and behaviour.identity != null and behaviour.identity.is_predicted(),
+		"their client predicts its own body over a real socket"
+	)
+
+	var island := RoomContent.furniture()[0]
+	var centre := Vector2(island.x, island.y)
+	var heading := (centre - on_server.position()).normalized()
+
+	var on: DotResult = await module.mod_tools.toggle(&"console", id, DotModTools.ACTION_NOCLIP, true, 100)
+	_check(on.ok, "the server's tools noclip them", str(on.error))
+	_check(
+		await _until(func() -> bool: return Dot2DAdminModifiers.is_noclipped(on_client.state), 5.0),
+		"and their client learns it from a snapshot"
+	)
+
+	var command := Dot2DCommand.new()
+	command.move = heading
+	_client.input.command_source = func() -> Dot2DCommand: return command
+
+	var worst := [0.0]
+	var through := await _until(func() -> bool:
+		worst[0] = maxf(worst[0], on_client.position().distance_to(on_server.position()))
+		return (on_server.position() - centre).dot(heading) > 0.0
+	, 10.0)
+	_check(through, "the server walks them through the island",
+		"%.1f from its centre" % on_server.position().distance_to(centre))
+	_check(worst[0] < 60.0, "and their client stays with them the whole way (worst %.1f units apart)" % worst[0])
+
+	# Frozen in the middle of the island with the stick still held: the one place a
+	# prediction that got freeze wrong could not hide, because letting go of noclip there
+	# would push them out.
+	var frozen: DotResult = await module.mod_tools.toggle(&"console", id, DotModTools.ACTION_FREEZE, true, 100)
+	_check(frozen.ok, "the server's tools freeze them", str(frozen.error))
+	var _told := await _until(func() -> bool: return Dot2DAdminModifiers.is_frozen(on_client.state), 5.0)
+	var server_at := on_server.position()
+	var client_at := on_client.position()
+	await _settle(60)
+	_check(
+		on_server.position().distance_to(server_at) < 1.0
+			and on_client.position().distance_to(client_at) < 1.0,
+		"and neither end moves them under a held stick (server %.2f, client %.2f)" % [
+			on_server.position().distance_to(server_at), on_client.position().distance_to(client_at)
+		]
+	)
+
+	_client.input.command_source = Callable()
+	var _thaw: DotResult = await module.mod_tools.toggle(&"console", id, DotModTools.ACTION_FREEZE, false, 100)
+	var _off: DotResult = await module.mod_tools.toggle(&"console", id, DotModTools.ACTION_NOCLIP, false, 100)
+	await _settle(30)
 	_done()
 
 

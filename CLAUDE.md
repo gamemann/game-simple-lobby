@@ -25,7 +25,13 @@ right.
 
 ## The moderator's live tools, in a room where nobody can be hurt
 
-dot-moderation's live tools are on this server's console and in chat, and **what a lobby needs a moderator for is moving people and renaming them**: bring, goto, send, return and rename work, with a stand-off in pixels (48) rather than the addon's metre and a half, which would put one avatar on top of the other. Everything else is refused with a reason `modtools` prints — nobody can be hurt or die here, there is nothing to hold, and noclip, freeze and speed would be server-only changes to a predicted 2D motor that carries no admin modifiers, so the owner's client would rubber-band. `dedicated` sends one occupant to another, returns them exactly, renames one and has a slay refused.
+dot-moderation's live tools are on this server's console and in chat, and **what a lobby needs a moderator for is moving people and renaming them**: bring, goto, send, return and rename work, with a stand-off in pixels (48) rather than the addon's metre and a half, which would put one avatar on top of the other. `dedicated` sends one occupant to another, returns them exactly, renames one and has a slay refused.
+
+**Noclip, freeze and speed work too, and they go through the state the client predicts**: dot-2d's `Dot2DAdminModifiers`, in each occupant's `Dot2DState.admin`, replicated by `RoomOccupantNet` as `net_admin`. Noclip is the furniture and the props not being there — `simulate_occupant` stops after the walls, inside the one function a client's replay runs — and not the walls, which are the room; noclip is for the person wedged in a bench. `headless_net` measures it tick by tick against a naive control (a crate only the client has, which is what a server-only noclip amounts to): 0.09 units at worst the shipped way, 102 the naive way; a freeze holds at 0.00 against 530 for a server that alone refuses to move somebody. `sandbox` repeats both over a real socket.
+
+**Building that found that this client had never predicted anything over a socket.** It learns its peer id from the hello, after its `DotNetManager` is set up, and dot-net's registry kept the id it was built with — so the client registered its own occupant as somebody else's and walked a round trip behind its own keyboard, while `headless_net`, whose loopback sets the id first, said "which is predicted, because it is theirs". Fixed in dot-net (the manager forwards `local_peer_id` to the registry); `sandbox` now asserts it over the socket, which is the only place it could fail.
+
+Everything else is refused with a reason `modtools` prints — nobody can be hurt or die here, there is nothing to hold, and there is no gravity in a top-down room.
 
 ## Chat is dot-chat's, and there is still exactly one path
 
@@ -449,9 +455,9 @@ tools/check.sh                # every suite ci.yml names, after a parse pass
 | `headless_room` | 68 | the room alone. Membership, walls, every level walked by a held direction, a flood over the whole floor for sealed pockets, and two worlds replaying the same commands bit-identically |
 | `headless_stack` | 24 | the player layer: the collision layout, the two sides, the class as a choice nothing applies, and the ring of seats — filled past eight, because two arrivals cannot tell a seat chooser from a coin |
 | `headless_presentation` | 74 | settings, audio, effects, the console and the party — **none of which `headless_room` can reach**, because that one is `RoomWorld` alone and has no client in it |
-| `headless_net` | 66 | every encoder against its decoder, then a session over a lossy delaying loopback, then a walk into the furniture |
-| `dedicated` | 118 | a real `DotServer`, a real module, a real WebSocket listener, and the props, chat, voice, moderation and identity halves — and a game change under the loaded module, to another room, to a game that is not one, and back |
-| `sandbox` | 62 | **a real server and two real clients, over real sockets, in one process** — chat, props and voice all cross a wire here and nowhere else |
+| `headless_net` | 77 | every encoder against its decoder, then a session over a lossy delaying loopback, then a walk into the furniture |
+| `dedicated` | 127 | a real `DotServer`, a real module, a real WebSocket listener, and the props, chat, voice, moderation and identity halves — and a game change under the loaded module, to another room, to a game that is not one, and back |
+| `sandbox` | 69 | **a real server and two real clients, over real sockets, in one process** — chat, props and voice all cross a wire here and nowhere else |
 
 **The list of suites lives in `.github/workflows/ci.yml` and nowhere else.** `tools/check.sh` reads its `suites:` line and fails if `release.yml`'s differs. Before that, check.sh carried its own list, which had lost `headless_stack`, and CI auto-detected `examples/headless_*` — so neither `dedicated` nor `sandbox`, the two that run a real server, ever ran in CI.
 

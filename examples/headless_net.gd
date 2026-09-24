@@ -29,7 +29,7 @@ const CLIENT_ID := RoomOffline.CLIENT_OCCUPANT
 ## A second person, with no connection. Peer 0, and the thing peer 0 must never mean.
 const GUEST_ID := 500002
 
-const CHECKS := 66
+const CHECKS := 77
 
 var _passed := 0
 var _failed := 0
@@ -53,6 +53,7 @@ func _run() -> void:
 	_test_event_bounds()
 	await _test_join()
 	await _test_prediction()
+	await _test_admin_is_predicted()
 	await _test_second_person()
 	await _test_leaving()
 	await _test_loss()
@@ -519,6 +520,175 @@ func _clear_heading(from: Vector2) -> Vector2:
 	# said it would not allow. Found while adding the snug, which is furniture on the
 	# side of the room this scan starts from.
 	return Vector2.ZERO
+
+
+## An administrator noclips and freezes somebody on the server, and that person's own
+## client has to PREDICT both.
+##
+## [b]The symptom is rubber-banding, and no server-side check can see it.[/b] So each window
+## records where the client predicted itself at every tick and where the server had it at
+## the SAME tick, once the shipped way — [Dot2DAdminModifiers] in the replicated state, which
+## is all the module's handlers do — and once the naive way, a server that lets somebody
+## through something the client still thinks is solid. The naive half has to DIVERGE, or
+## the shipped half could be a window in which the client was never asked to disagree.
+## game-arena's `headless_net` is the same shape for the first-person motor.
+func _test_admin_is_predicted() -> void:
+	_section("an admin's noclip and freeze, predicted by the person they happen to")
+
+	var pair := _offline(4)
+
+	if not _check(await _joined(pair), "the session comes up"):
+		_done()
+		return
+
+	# Settled first. The client's input timeline moves while the clock syncs, and a window
+	# measured across that compares a tick the client predicted twice — which read as a
+	# 17-unit disagreement in a window where the two ends agreed to 0.1 on every other tick.
+	await _pump(pair, 60, Dot2DCommand.new())
+
+	var server_me := pair.server_world.occupant_for(CLIENT_ID)
+	var client_me := pair.client_world.occupant_for(CLIENT_ID)
+	var start := client_me.position()
+	var heading := _clear_heading(start)
+
+	if not _check(heading != Vector2.ZERO, "there is open floor to walk"):
+		_done()
+		return
+
+	var command := Dot2DCommand.new()
+	command.move = heading
+
+	# Already walking when the admin acts. The first ticks of a walk are corrected once
+	# whatever else is true — the server takes up a new input a few ticks after the client
+	# does — and a window that included them measured that (9 units) and called it noclip.
+	await _pump(pair, WALK_UP, command)
+
+	# A crate across the path, in both rooms: adopted directly rather than placed, so it
+	# goes where the test says and not where placement rules would nudge it.
+	var crate := server_me.position() + heading * 110.0
+	pair.server_props.adopt(9001, &"crate", crate, 0.0, 0)
+	pair.client_props.adopt(9001, &"crate", crate, 0.0, 0)
+
+	var on := Dot2DAdminModifiers.set_noclip(server_me.state, true)
+	_check(on.ok, "the server noclips them", str(on.error))
+
+	var shipped: Dictionary = await _admin_window(pair, 70, command)
+	_check(
+		Dot2DAdminModifiers.is_noclipped(client_me.state),
+		"the client learned it from the snapshots"
+	)
+	# Past the crate's CENTRE, which somebody the crate stopped can never reach.
+	var past := (server_me.position() - crate).dot(heading)
+	_check(past > 0.0, "the server walked them through the crate", "%.1f past its centre" % past)
+	_check(
+		float(shipped["worst"]) < 2.0,
+		"and the client predicted every tick of it where the server had it",
+		"worst %.2f units" % float(shipped["worst"])
+	)
+
+	# Naive: noclip off, and the crate in the CLIENT's room only — a server that lets
+	# somebody through something their client still thinks is solid, which is what a
+	# server-only noclip is. (Dropping it from the server's room instead is not the same
+	# test: a server's drop is broadcast, and the client's crate goes with it.)
+	var _off := Dot2DAdminModifiers.set_noclip(server_me.state, false)
+	pair.server_props.drop(9001)
+	await _admin_reset(pair, start)
+	await _pump(pair, WALK_UP, command)
+	pair.client_props.adopt(9002, &"crate", server_me.position() + heading * 110.0, 0.0, 0)
+	var naive: Dictionary = await _admin_window(pair, 70, command)
+	print("  measured: noclip shipped worst %.2f; naive worst %.2f (%d ticks over 8)" % [
+		float(shipped["worst"]), float(naive["worst"]), int(naive["over"])
+	])
+	_check(
+		float(naive["worst"]) > 20.0,
+		"a server-only noclip is one the client does not predict: the rubber band",
+		"naive worst %.2f — if this passes quietly, the check above proves nothing" % float(naive["worst"])
+	)
+
+	pair.client_props.drop(9002)
+	await _admin_reset(pair, start)
+
+	# Freeze, with the stick held over.
+	var frozen := Dot2DAdminModifiers.set_frozen(server_me.state, true)
+	_check(frozen.ok, "the server freezes them", str(frozen.error))
+	await _pump(pair, 12, Dot2DCommand.new())
+	var held_server := server_me.position()
+	var held_client := client_me.position()
+	var still: Dictionary = await _admin_window(pair, 60, command)
+	_check(
+		server_me.position().distance_to(held_server) < 0.5
+			and client_me.position().distance_to(held_client) < 0.5,
+		"neither end moves them under a held stick",
+		"server %.2f, client %.2f" % [
+			server_me.position().distance_to(held_server),
+			client_me.position().distance_to(held_client)
+		]
+	)
+	_check(float(still["worst"]) < 0.5, "and the two agree at every tick", "worst %.2f" % float(still["worst"]))
+
+	# Naive: unfrozen, with the server alone refusing to move anybody.
+	var _thaw := Dot2DAdminModifiers.set_frozen(server_me.state, false)
+	var speed := pair.server_world.tunables.max_speed
+	pair.server_world.tunables.max_speed = 0.0
+	var naive_freeze: Dictionary = await _admin_window(pair, 60, command)
+	pair.server_world.tunables.max_speed = speed
+	print("  measured: freeze shipped worst %.2f; naive worst %.2f (%d ticks over 8)" % [
+		float(still["worst"]), float(naive_freeze["worst"]), int(naive_freeze["over"])
+	])
+	_check(
+		float(naive_freeze["worst"]) > 8.0,
+		"a server-only freeze is one the client walks out of",
+		"naive worst %.2f" % float(naive_freeze["worst"])
+	)
+
+	_done()
+
+
+## Ticks of walking before a window is measured. With the 70 measured after it, a walk
+## stays inside [constant WALK_REACH], which is as far as [method _clear_heading] looks.
+const WALK_UP := 30
+
+
+## Puts the person back at [param at] on the server and lets both ends settle.
+func _admin_reset(pair: RoomOffline, at: Vector2) -> void:
+	var me := pair.server_world.occupant_for(CLIENT_ID)
+	me.state.position = at
+	me.state.velocity = Vector2.ZERO
+	await _pump(pair, 40, Dot2DCommand.new())
+
+
+## [method _pump], recording where the client predicted itself at each input tick and
+## where the server had it at each server tick, and comparing the two at the ticks both
+## saw: `{worst, over}`, the second counting ticks more than eight units apart.
+func _admin_window(pair: RoomOffline, ticks: int, command: Dot2DCommand) -> Dictionary:
+	var client_at := {}
+	var server_at := {}
+	var step := pair.client_net.clock.tick_duration()
+
+	for _index in range(ticks):
+		_ticks[pair] = int(_ticks.get(pair, 0)) + 1
+		var clock := pair.client_net.clock
+		clock.advance(step)
+		var input_tick := clock.input_tick() if clock.is_synced() else int(_ticks[pair])
+		pair.client_bridge.client_tick(input_tick, command)
+		client_at[input_tick] = pair.client_world.occupant_for(CLIENT_ID).position()
+		pair.server_tick(int(_ticks[pair]))
+		server_at[int(_ticks[pair])] = pair.server_world.occupant_for(CLIENT_ID).position()
+		pair.client_net.interpolate_frame()
+		await get_tree().process_frame
+
+	var worst := 0.0
+	var over := 0
+
+	for tick: int in server_at:
+		if not client_at.has(tick):
+			continue
+		var gap: float = (client_at[tick] as Vector2).distance_to(server_at[tick] as Vector2)
+		worst = maxf(worst, gap)
+		if gap > 8.0:
+			over += 1
+
+	return {"worst": worst, "over": over}
 
 
 func _test_second_person() -> void:

@@ -497,11 +497,12 @@ func _build_services() -> DotResult:
 ##
 ## [b]Moving people and renaming them is what a lobby needs a moderator for[/b] — the one
 ## standing on the door, the one whose name should not be on the roster — so bring, goto,
-## send, return and rename work. Everything else is refused with a reason: nobody can be
-## hurt or die here, there is nothing to hold, and the movement modifiers would be
-## server-only changes to a PREDICTED 2D motor — `Dot2DMotor` carries no admin modifiers in
-## its replicated state the way dot-player-controller's first-person one does, so a server
-## that moved somebody their own client does not know about would rubber-band them.
+## send, return and rename work, and so do noclip, freeze and speed — the first being the
+## one a lobby actually needs, for somebody wedged in the furniture. Those three are
+## dot-2d's [Dot2DAdminModifiers], in the occupant's replicated state, because a server that
+## moved somebody their own client does not know about would rubber-band them;
+## `headless_net` measures that against a naive control. Everything else is refused with a
+## reason: nobody can be hurt or die here, and there is nothing to hold.
 func _build_mod_tools() -> void:
 	mod_tools = DotModTools.new()
 	mod_tools.name = "ModTools"
@@ -529,12 +530,15 @@ func _build_mod_tools() -> void:
 		occupant.display_name = str(args["name"]).strip_edges().substr(0, 32)
 		return DotResult.success(occupant.display_name)
 
-	var prediction := "the 2D motor carries no admin modifiers a client could predict, so it would rubber-band"
+	mod_tools.handlers[DotModTools.ACTION_NOCLIP] = func(id: StringName, args: Dictionary) -> DotResult:
+		return Dot2DAdminModifiers.set_noclip(_occupant_state(id), bool(args["on"]))
+	mod_tools.handlers[DotModTools.ACTION_FREEZE] = func(id: StringName, args: Dictionary) -> DotResult:
+		return Dot2DAdminModifiers.set_frozen(_occupant_state(id), bool(args["on"]))
+	mod_tools.handlers[DotModTools.ACTION_SPEED] = func(id: StringName, args: Dictionary) -> DotResult:
+		return Dot2DAdminModifiers.set_speed(_occupant_state(id), float(args["scale"]))
+
 	var harmless := "nobody can be hurt in a lobby"
 	var refusals := {
-		DotModTools.ACTION_NOCLIP: prediction,
-		DotModTools.ACTION_FREEZE: prediction,
-		DotModTools.ACTION_SPEED: prediction,
 		DotModTools.ACTION_GRAVITY: "there is no gravity in a top-down room",
 		DotModTools.ACTION_GOD: harmless,
 		DotModTools.ACTION_BUDDHA: harmless,
@@ -553,6 +557,13 @@ func _build_mod_tools() -> void:
 
 	add_child(mod_tools)
 	mod_commands = DotModToolCommands.install(self, mod_tools, server)
+
+
+## The state an admin modifier is written into, or null — which [Dot2DAdminModifiers]
+## refuses with a reason rather than crashing on.
+func _occupant_state(id: StringName) -> Dot2DState:
+	var occupant := world.occupant_for(String(id).to_int()) if String(id).is_valid_int() else null
+	return occupant.state if occupant != null else null
 
 
 # --- The tick --------------------------------------------------------------

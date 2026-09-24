@@ -32,7 +32,7 @@ const PORT := 27086
 const SERVER_DIR := "user://room_sandbox"
 
 ## Every check this suite runs, section counter included. See docs/testing.md.
-const CHECKS := 74
+const CHECKS := 81
 
 var _passed := 0
 var _failed := 0
@@ -93,6 +93,7 @@ func _run() -> void:
 			await _test_blind_and_beacon_over_the_socket()
 			await _test_props()
 			await _test_voice()
+			await _test_earshot()
 			await _test_leaving()
 
 	_teardown()
@@ -990,6 +991,121 @@ func _test_voice() -> void:
 
 
 ## Which peer the first client is, from the server's own view of it.
+## [lobby-earshot-1]: the wing is a separate room acoustically as well as geometrically.
+##
+## [b]Here and not only in `headless_room`, because this is where the rule meets both
+## routers.[/b] The geometry is checked on its own there; what only this can say is that
+## dot-chat's and dot-voice's `can_hear_fn` are wired to it on a real server, so a line
+## said over a real socket does not arrive at a real client on the other side of a wall.
+## Before it, "near" reached 420 and the partition is 180 thick.
+func _test_earshot() -> void:
+	_section("out of earshot through the partition")
+
+	var module := _module()
+	var services := module.services
+	var ada := module.world.occupant_for(_client.bridge.local_occupant_id)
+	var grace := module.world.occupant_for(_other.bridge.local_occupant_id)
+
+	if ada == null or grace == null:
+		for what in ["range", "accepted", "wing", "hall", "same room", "voice", "voice wall"]:
+			_check(false, what, "nobody to place")
+		_done()
+		return
+
+	# Placed on the server, which is the only place a position decides anything. Neither
+	# client is sending movement by now, so nothing walks them back.
+	var place := func(who: Object, at: Vector2) -> void:
+		who.get("state").position = at
+		who.get("state").velocity = Vector2.ZERO
+
+	var in_wing := Vector2(RoomContent.WALL_X - 150.0, -150.0)
+	var in_hall := Vector2(RoomContent.WALL_X + 160.0, -150.0)
+	place.call(ada, in_wing)
+	place.call(grace, in_hall)
+	await _settle(5)
+
+	_check(
+		ada.position().distance_to(grace.position()) < RoomServices.NEAR_RANGE
+			and RoomContent.in_wing(ada.position())
+			and not RoomContent.in_wing(grace.position()),
+		"Ada in the wing and Grace in the hall are %.0f apart, inside near's %.0f"
+			% [ada.position().distance_to(grace.position()), RoomServices.NEAR_RANGE]
+	)
+
+	# [b]A negative needs a marker behind it.[/b] Both lines go down one ordered
+	# connection, so once the room-wide line after it has arrived, a near line that was
+	# going to arrive already has.
+	_client.bridge.say(RoomServices.CHANNEL_NEAR, "said in the wing")
+	_client.bridge.say(RoomServices.CHANNEL_ALL, "marker after the wing")
+	var marked := await _until(func() -> bool:
+		return _text_heard(_other_heard, "marker after the wing")
+	)
+	_check(
+		marked and _text_heard(_heard, "said in the wing"),
+		"a near line from the wing is accepted (its speaker sees it)"
+	)
+	_check(
+		marked and not _text_heard(_other_heard, "said in the wing"),
+		"and does not reach the hall through the partition"
+	)
+
+	_other.bridge.say(RoomServices.CHANNEL_NEAR, "said in the hall")
+	_other.bridge.say(RoomServices.CHANNEL_ALL, "marker after the hall")
+	var marked_back := await _until(func() -> bool:
+		return _text_heard(_heard, "marker after the hall")
+	)
+	_check(
+		marked_back and not _text_heard(_heard, "said in the hall"),
+		"nor does a near line from the hall reach the wing"
+	)
+
+	place.call(grace, Vector2(RoomContent.WALL_X - 150.0, 150.0))
+	await _settle(5)
+	_other.bridge.say(RoomServices.CHANNEL_NEAR, "said beside you")
+	_check(
+		await _until(func() -> bool: return _text_heard(_heard, "said beside you")),
+		"but once both are in the wing, near reaches (%.0f apart)"
+			% ada.position().distance_to(grace.position())
+	)
+
+	# Proximity voice, through the same function. The lobby's voice is room-wide by
+	# default and a client asks for proximity per packet, which is what this sends.
+	var config := RoomServices.voice_config()
+	var packet := DotVoicePacket.new()
+	packet.channel = DotVoiceRouter.Channel.PROXIMITY
+	packet.codec_id = config.codec_id
+	packet.sample_count = config.frame_samples()
+	packet.payload = DotVoiceCodec.instance_for(config.codec_id).encode(
+		DotVoiceSourceBuffer.tone(440.0, config.frame_ms / 1000.0, config.sample_rate)
+	)
+	var counts: Array[int] = []
+	var speaker := _link_peer()
+	var count_it := func(from: int, listeners: int) -> void:
+		if from == speaker:
+			counts.append(listeners)
+	services.voice.speech_relayed.connect(count_it)
+
+	packet.sequence = 100
+	_client.bridge.link.send_voice(1, packet.to_bytes())
+	var same := await _until(func() -> bool: return counts.size() >= 1, 5.0)
+	_check(
+		same and counts[0] == 1,
+		"a proximity voice frame in the wing reaches the other person in it (%s)" % str(counts)
+	)
+
+	place.call(grace, in_hall)
+	await _settle(5)
+	packet.sequence = 101
+	_client.bridge.link.send_voice(1, packet.to_bytes())
+	var walled := await _until(func() -> bool: return counts.size() >= 2, 5.0)
+	_check(
+		walled and counts[1] == 0,
+		"and one through the partition reaches nobody (%s)" % str(counts)
+	)
+	services.voice.speech_relayed.disconnect(count_it)
+	_done()
+
+
 func _link_peer() -> int:
 	return _module().bridge.peer_for_occupant(_client.bridge.local_occupant_id)
 

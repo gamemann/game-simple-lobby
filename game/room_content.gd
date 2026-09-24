@@ -147,14 +147,10 @@ static func furniture() -> PackedVector3Array:
 		# through by the resolve. The pair either side of the middle are the door
 		# posts and the DOORWAY_SPAN between them is the only way across.
 		# The north end of the partition stops NORTH_GATE_Y short of the north wall,
-		# and the gap is the second way through. See NORTH_GATE_Y.
-		Vector3(WALL_X, NORTH_GATE_Y, POST_RADIUS),
-		Vector3(WALL_X, -300.0, POST_RADIUS),
-		Vector3(WALL_X, -140.0, POST_RADIUS),
-		Vector3(WALL_X, 140.0, POST_RADIUS),
-		Vector3(WALL_X, 300.0, POST_RADIUS),
-		Vector3(WALL_X, 460.0, POST_RADIUS),
-
+		# and the gap is the second way through. See NORTH_GATE_Y and [method partition].
+	])
+	out.append_array(partition())
+	out.append_array(PackedVector3Array([
 		# The wing itself: a counter down its west wall — a table at either end and
 		# a bench between them — so the middle of it stays clear and the doorway
 		# opens onto somewhere to walk rather than onto a table.
@@ -171,7 +167,7 @@ static func furniture() -> PackedVector3Array:
 		Vector3(WING_PIECE_X, -330.0, WING_PIECE_RADIUS),
 		Vector3(WING_PIECE_X, 330.0, WING_PIECE_RADIUS),
 		Vector3(WING_PIECE_X, 0.0, WING_PIECE_RADIUS),
-	])
+	]))
 
 	# --- The gallery along the north wall ------------------------------------
 	#
@@ -193,6 +189,23 @@ static func furniture() -> PackedVector3Array:
 	out.append_array(alcove_screen())
 
 	return out
+
+
+## The partition's six posts, north to south.
+##
+## Separate from [method furniture] so [method walls] can name it without a position
+## test, for [method gallery_screen]'s reason. [method furniture] appends it at exactly
+## the place in the list the six used to be written out, because the resolve runs in
+## list order and a reorder is a different room to a replay.
+static func partition() -> PackedVector3Array:
+	return PackedVector3Array([
+		Vector3(WALL_X, NORTH_GATE_Y, POST_RADIUS),
+		Vector3(WALL_X, -300.0, POST_RADIUS),
+		Vector3(WALL_X, -140.0, POST_RADIUS),
+		Vector3(WALL_X, 140.0, POST_RADIUS),
+		Vector3(WALL_X, 300.0, POST_RADIUS),
+		Vector3(WALL_X, 460.0, POST_RADIUS),
+	])
 
 
 ## Where the partition stands. West of the north-west and south-west pillars.
@@ -531,6 +544,63 @@ static func in_alcove(at: Vector2) -> bool:
 ## -620 again would keep passing after the wall moved.
 static func in_wing(at: Vector2) -> bool:
 	return at.x < WALL_X
+
+
+# --- Earshot ------------------------------------------------------------------
+
+## What stops a voice: the partition, the gallery's screen, the snug's L and the alcove's
+## bow. Everything else in [method furniture] is not a wall and is not here.
+##
+## [b]A wall is something built to make a second space; furniture is something in one.[/b]
+## The island is "small enough to see over", a pillar is a landmark, and the benches, the
+## wing's counter and the snug's seat are things to stand at and talk across — a table
+## that cut a conversation in half would be a table nobody sits at. Props are not here
+## either: somebody placing a crate must not be able to wall a person out of the room's
+## conversation.
+static func walls() -> PackedVector3Array:
+	var out := partition()
+	out.append_array(gallery_screen())
+	out.append_array(snug_screen())
+	out.append_array(alcove_screen())
+	return out
+
+
+## Whether somebody at [param a] can hear somebody at [param b], as far as the room is
+## concerned. Distance is not asked here: the chat channel's radius and the voice range
+## are, and this is consulted after them (dot-chat's and dot-voice's `can_hear_fn`).
+##
+## [b]The rule: you hear whoever you could see.[/b] A straight line between the two that
+## crosses no wall post carries; one that crosses a post does not. Written down because
+## the doorways are where a rule like this is decided:
+##
+## - [b]A doorway is a gap in a wall, and a sound goes through a gap.[/b] Somebody in the
+##   hall looking through the front door into the wing hears whoever is in their line of
+##   sight, and nobody round the corner of the door post.
+## - [b]Somebody standing IN a doorway is in both rooms[/b], because from the doorway
+##   both sides are in sight. That is what standing in a doorway is for, and a lobby is
+##   the one place people genuinely do.
+## - [b]Not "the same room" by a predicate.[/b] [method in_wing] draws a line through the
+##   middle of the doorway, and two people a step apart either side of it — in the door,
+##   in plain sight — would be deaf to each other. A room test answers "where is this
+##   person"; this answers "is anything in the way", which is the question.
+##
+## Every wall here is a row of posts that overlap, so a line crossing one crosses a post
+## — which is what makes testing circles enough. Symmetric by construction.
+static func within_earshot(a: Vector2, b: Vector2) -> bool:
+	var span := b - a
+	var length_squared := span.length_squared()
+
+	for post in walls():
+		var centre := Vector2(post.x, post.y)
+		var closest := a
+
+		if length_squared > 0.0:
+			closest = a + span * clampf((centre - a).dot(span) / length_squared, 0.0, 1.0)
+
+		if closest.distance_squared_to(centre) < post.z * post.z:
+			return false
+
+	return true
 
 
 ## Pushes [param position] out of any furniture it is inside. Returns where it ends up.

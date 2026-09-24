@@ -311,13 +311,19 @@ The south-west quarter of the hall had a pillar in it and nothing else, and ever
 
 `headless_room`'s **the alcove off the south wall** walks it: straight down at the bow's middle from the hall and stopped; along the wall on one held direction each way, in at one gate and out of the other, **drifting 0.0 off the line** — a check that fails the moment a post stands in the lane rather than only when it corks it; every neighbouring post pair overlapping by the partition's twenty; and nothing about it narrower than the front door, walls included (exactly 100.0 at the end posts, the derivation holding). The flood reaches it. Armed twice: four posts fewer (spacing 68.7, a hairline gap no walker fits) fails the overlap check alone, which is the one that was written for it; gates at 30% of the door fail seven, including the flood reporting the sealed pocket behind them at (-230, 414).
 
+With the earshot rule below it is also the one place in the hall's south half a conversation can be had out of: a line from the hall into it crosses the bow.
+
 ##### The check it found: a crowded level that `headless_net` promised to fail on, and passed
 
 `headless_net`'s **under loss** section walks along `_clear_heading`, which scans 64 headings from the spawn for one clear of furniture for 480 units. Its comment says that if there is none, *"a level this crowded is a level worth failing on rather than one to quietly measure a grinding walk in"*. The code under that comment called `push_error` and returned `Vector2.RIGHT`. A `push_error` is a line on stderr and changes no exit code, so with no clear heading anywhere (forced by lengthening the reach) the suite walked due east into the wall, measured a correction rate against it, and exited 0 with **65 passed, 0 failed**. The one outcome the comment ruled out.
 
 The snug is what made it worth looking at. The spawn is the ring's east seat and the heading the scan used to choose, 45°, runs straight through where the snug now stands. The scan now picks 101° (rate 0.275 → 0.300, drift 0.063 → 0.072, both well inside their bars). A heading that silently gives up is the level after this one making the loss section measure a wall. It returns zero now and the section fails a check on it, `there is open floor to walk on from the spawn`, which fails and exits 1 with the reach lengthened.
 
-**Not folded in: `[lobby-earshot-1]`.** The snug is the obvious room to be out of earshot in, and it isn't. `near` is still a radius through its screen, as it is through the partition. The fix is a `can_hear_fn` seam in dot-chat's router and dot-voice's, and it belongs in those two repositories rather than in a position function that lies about where somebody is standing.
+**`[lobby-earshot-1]`, done: a radius is not a room, and the walls now say so.** The wing was a separate room geometrically and not acoustically — "near" reaches 420 and the partition is 180 thick, so two people either side of it were one conversation, and the same was true through the gallery's screen, the snug's L and the alcove's bow. dot-chat's `DotChatRouter` and dot-voice's `DotVoiceRouter` each gained `can_hear_fn(listener, speaker, listener_at, speaker_at) -> bool`, asked after their distance test; neither knows what a wall is. `RoomServices._can_hear` answers both from `RoomContent.within_earshot`, so nobody reads a line from somebody they could not hear.
+
+**The rule is line of sight, and the doorways are why.** A straight line between the two that crosses no post of `RoomContent.walls()` — the partition, the gallery's screen, the snug's L, the alcove's bow — carries; one that crosses a post does not. A doorway is a gap, so you hear through it whoever you could see through it; **somebody standing in a doorway is in both rooms**, because from there both are in sight, and a lobby is the one place people genuinely stand in doorways. A room predicate was the obvious alternative and is wrong exactly there: `in_wing` draws its line through the middle of the doorway, so two people a step apart in the door, in plain sight, would be deaf to each other. Furniture — the island, pillars, benches, the wing's counter, the snug's seat — is not a wall: it is what people stand at and talk across. Props are not walls either, or placing a crate would wall somebody out of the conversation. Every wall is a row of overlapping posts, so a line through a wall crosses a post and testing circles is enough.
+
+`headless_room`'s **who can hear whom through the walls** checks the rule alone (8 checks: either side of the partition at 224 apart, the front door both ways, somebody in the doorway hearing both rooms, furniture not a wall, the gallery, the snug, the alcove from outside and from inside). `sandbox`'s **out of earshot through the partition** puts Ada in the wing and Grace in the hall 310 apart on the real server and asserts a near line crosses neither way (each negative behind a room-wide marker on the same ordered connection), reaches once both are in the wing, and that a PROXIMITY voice frame reaches one listener in the same room and none through the partition. Armed: unwiring both `can_hear_fn`s fails three sandbox checks; dropping the partition and gallery from `walls()` fails those two rule checks. The lobby's voice is still room-wide by default (`_build_voice`); a proximity packet is what obeys the walls.
 
 **The spawn is resolved too.** `Dot2DArena.spawn_position` knows the room's rectangle and
 nothing about what is standing in it, so a share of its answers are inside something. A
@@ -470,12 +476,12 @@ tools/check.sh                # every suite ci.yml names, after a parse pass
 
 | | | |
 | --- | --- | --- |
-| `headless_room` | 76 | the room alone. Membership, walls, every level walked by a held direction, a flood over the whole floor for sealed pockets, and two worlds replaying the same commands bit-identically |
+| `headless_room` | 84 | the room alone. Membership, walls, every level walked by a held direction, a flood over the whole floor for sealed pockets, and two worlds replaying the same commands bit-identically |
 | `headless_stack` | 24 | the player layer: the collision layout, the two sides, the class as a choice nothing applies, and the ring of seats — filled past eight, because two arrivals cannot tell a seat chooser from a coin |
 | `headless_presentation` | 88 | settings, audio, effects, the console and the party — **none of which `headless_room` can reach**, because that one is `RoomWorld` alone and has no client in it |
 | `headless_net` | 84 | every encoder against its decoder, then a session over a lossy delaying loopback, then a walk into the furniture |
 | `dedicated` | 143 | a real `DotServer`, a real module, a real WebSocket listener, and the props, chat, voice, moderation and identity halves — and a game change under the loaded module, to another room, to a game that is not one, and back |
-| `sandbox` | 74 | **a real server and two real clients, over real sockets, in one process** — chat, props and voice all cross a wire here and nowhere else |
+| `sandbox` | 81 | **a real server and two real clients, over real sockets, in one process** — chat, props and voice all cross a wire here and nowhere else |
 
 **The list of suites lives in `.github/workflows/ci.yml` and nowhere else.** `tools/check.sh` reads its `suites:` line and fails if `release.yml`'s differs. Before that, check.sh carried its own list, which had lost `headless_stack`, and CI auto-detected `examples/headless_*` — so neither `dedicated` nor `sandbox`, the two that run a real server, ever ran in CI.
 
@@ -523,6 +529,7 @@ the total at the bottom cannot reveal a check that never ran.
 | Who counts as an admin, and what a speaker's key is | `RoomServices._is_admin` / `_key_of` / `_subject_for_peer` |
 | The voice format both ends must agree on | `RoomServices.voice_config()` |
 | Whether voice is proximity or the whole room | `RoomServices._build_voice`, one line |
+| What stops a voice or a near line | `RoomContent.walls()`; the rule is `RoomContent.within_earshot`, asked by both routers through `RoomServices._can_hear` |
 | What somebody may wear | `RoomContent.avatar_schema()` |
 | Where profiles and avatars are stored, and the pseudonym scope | `RoomPlatform` |
 | Which servers the launcher knows about | `RoomBrowser._start`, a `DotBrowserSource` each |

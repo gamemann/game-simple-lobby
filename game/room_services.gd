@@ -2,6 +2,7 @@ extends Node
 
 const RoomBridge := preload("room_bridge.gd")
 const RoomWorld := preload("room_world.gd")
+const RoomContent := preload("room_content.gd")
 
 ## Chat, moderation and voice, wired to this room's people and this room's wire.
 ##
@@ -270,6 +271,7 @@ func _build_chat() -> DotResult:
 	chat.name_fn = _name_of
 	chat.key_fn = _key_of
 	chat.position_fn = _position_of
+	chat.can_hear_fn = _can_hear
 	chat.is_admin_fn = _is_admin
 
 	add_child(chat)
@@ -548,6 +550,8 @@ func _build_voice() -> DotResult:
 	# "where is this person" is a second thing that can be a tick out of step with the
 	# first, and the visible failure would be hearing somebody you cannot read.
 	voice.position_fn = _position_of
+	# And the same walls, from the same function, for the same reason.
+	voice.can_hear_fn = _can_hear
 
 	add_child(voice)
 
@@ -668,6 +672,21 @@ func _position_of(peer_id: int) -> Vector3:
 
 	var at := occupant.position()
 	return Vector3(at.x, at.y, 0.0)
+
+
+## Whether a listener inside the near radius can hear the speaker through the room.
+##
+## [b]The level's answer, not the addons'.[/b] dot-chat and dot-voice know a distance and
+## nothing about walls, which is right: what blocks a voice is this room's decision and
+## lives in [method RoomContent.within_earshot] beside the posts it tests. Both routers
+## ask this one function, so nobody can read a line from somebody they could not hear.
+## Before it the wing was a separate room geometrically and not acoustically: the
+## partition is 180 thick and "near" reaches 420, so two people either side of it were
+## a conversation.
+func _can_hear(_listener: int, _speaker: int, listener_at: Vector3, speaker_at: Vector3) -> bool:
+	return RoomContent.within_earshot(
+		Vector2(listener_at.x, listener_at.y), Vector2(speaker_at.x, speaker_at.y)
+	)
 
 
 func _is_admin(peer_id: int) -> bool:

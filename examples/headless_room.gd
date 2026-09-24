@@ -13,7 +13,7 @@ const RoomWorld := preload("../game/room_world.gd")
 ## Exits non-zero on any failure. No netcode, no server, no rendering — this is
 ## [RoomWorld] alone, which is the only part of the game that decides anything.
 
-const CHECKS := 76
+const CHECKS := 84
 
 var _passed := 0
 var _failed := 0
@@ -49,6 +49,7 @@ func _run() -> void:
 	_test_gallery()
 	_test_snug()
 	_test_alcove()
+	_test_earshot()
 	_test_reach()
 	_test_determinism()
 	_test_bubbles()
@@ -883,6 +884,68 @@ func _test_alcove() -> void:
 		"and nothing about it is narrower than the front door (%.1f against %.0f, %s)"
 			% [narrowest, RoomContent.DOORWAY_SPAN, where],
 		"its gates are the door's width by derivation; anything narrower is a slot"
+	)
+	_done()
+
+
+## Who can hear whom, as the room decides it. See [method RoomContent.within_earshot].
+##
+## [b]Pure geometry, and the sandbox is where it meets the routers.[/b] This is the rule on
+## its own — every wall, both doorways and the furniture that is not a wall — so a failure
+## here names a wall rather than a socket.
+func _test_earshot() -> void:
+	_section("who can hear whom through the walls")
+
+	var hears := func(a: Vector2, b: Vector2) -> bool:
+		return RoomContent.within_earshot(a, b) and RoomContent.within_earshot(b, a)
+	var deaf := func(a: Vector2, b: Vector2) -> bool:
+		return not RoomContent.within_earshot(a, b) and not RoomContent.within_earshot(b, a)
+	var clear := RoomContent.POST_RADIUS + RoomContent.OCCUPANT_RADIUS
+
+	# The bug: both pressed against the partition, level with a post, well inside "near".
+	var wing_side := Vector2(RoomContent.WALL_X - clear, -220.0)
+	var hall_side := Vector2(RoomContent.WALL_X + clear, -220.0)
+	_check(
+		deaf.call(wing_side, hall_side),
+		"two people either side of the partition, %.0f apart, cannot hear each other"
+			% wing_side.distance_to(hall_side),
+		"the near radius is 420 and the partition is 180 thick"
+	)
+	_check(
+		hears.call(Vector2(-770.0, 0.0), Vector2(-470.0, 0.0)),
+		"through the front door they can, either way"
+	)
+	_check(
+		hears.call(Vector2(RoomContent.WALL_X, 0.0), Vector2(-770.0, 150.0))
+			and hears.call(Vector2(RoomContent.WALL_X, 0.0), Vector2(-470.0, 100.0)),
+		"somebody standing in the doorway hears both rooms",
+		"that is what a doorway is for, and a room predicate would split it down the middle"
+	)
+	_check(
+		hears.call(Vector2(-770.0, -200.0), Vector2(-770.0, 200.0))
+			and hears.call(Vector2(-200.0, 0.0), Vector2(200.0, 0.0)),
+		"furniture is not a wall: along the wing past its counter, and across the island"
+	)
+	_check(
+		deaf.call(Vector2(0.0, -450.0), Vector2(0.0, -200.0)),
+		"behind the gallery's screen is out of earshot of the hall in front of it"
+	)
+	_check(
+		deaf.call(Vector2(760.0, 450.0), Vector2(760.0, 200.0)),
+		"inside the snug is out of earshot of the hall across its screen"
+	)
+
+	var in_alcove := Vector2(RoomContent.ALCOVE_X, 440.0)
+	_check(
+		RoomContent.in_alcove(in_alcove)
+			and deaf.call(in_alcove, Vector2(RoomContent.ALCOVE_X, 250.0)),
+		"inside the alcove is out of earshot of the hall across its bow"
+	)
+	_check(
+		hears.call(
+			Vector2(RoomContent.ALCOVE_X - 60.0, 470.0), Vector2(RoomContent.ALCOVE_X + 60.0, 470.0)
+		),
+		"and two people inside it hear each other"
 	)
 	_done()
 

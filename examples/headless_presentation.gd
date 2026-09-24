@@ -48,7 +48,7 @@ func _run() -> void:
 	_test_sounds_are_bounded()
 	_test_effects_respect_the_player()
 	_test_console()
-	_test_party()
+	await _test_party()
 	_test_chat_key()
 	await _test_escape_menu()
 
@@ -343,7 +343,7 @@ func _test_party() -> void:
 
 	if not DotP2PSession.available():
 		# The honest half on a machine with no WebRTC extension, which is this one.
-		var refused := host.host("Ada")
+		var refused: DotResult = await host.host("Ada")
 		_check(not refused.ok, "a build with no WebRTC refuses to host")
 		_check(
 			refused.error.detail != "",

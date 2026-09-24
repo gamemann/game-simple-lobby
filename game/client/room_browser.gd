@@ -46,6 +46,8 @@ var _entry: LineEdit = null
 var _rows: Array[DotBrowserEntry] = []
 var _selected: int = -1
 var _since_refresh: float = 0.0
+var _last_online := -1
+var _last_total := -1
 
 
 func _ready() -> void:
@@ -136,14 +138,30 @@ func _start() -> void:
 	browser.favourites_path = "user://room_servers.json"
 	add_child(browser)
 
-	browser.start()
+	var started := browser.start()
+
+	if not started.ok:
+		# WARN: the list will stay empty and the player can still type an address in, so
+		# the screen is degraded rather than broken — but nothing on it says why.
+		DotLog.result(CHANNEL, "the server list could not start", started, DotLog.Level.WARN)
+
 	# History and favourites, which is the only source that needs no tracker: a lobby you
 	# have been in before is a lobby you can get back to.
-	browser.load_favourites()
+	var remembered := browser.load_favourites()
+	DotLog.debug(CHANNEL, "server list", {
+		"remembered": remembered, "path": browser.favourites_path,
+	})
 
 	browser.entry_updated.connect(func(_entry: DotBrowserEntry) -> void: _redraw())
 	browser.refresh_finished.connect(func(online: int, total: int) -> void:
 		_status.text = "%d of %d answering." % [online, total]
+		# On a change only. This refreshes every few seconds while the screen is up, and
+		# a line per refresh saying the same two numbers is noise; the moment a known
+		# server stops answering is the line worth having.
+		if online != _last_online or total != _last_total:
+			DotLog.debug(CHANNEL, "servers answering", {"online": online, "total": total})
+			_last_online = online
+			_last_total = total
 		_redraw()
 	)
 
@@ -173,6 +191,9 @@ func add_address(text: String) -> bool:
 
 	if not parsed.ok:
 		_status.text = "That is not an address: %s" % parsed.error.message
+		DotLog.debug(CHANNEL, "address refused", {
+			"text": text.strip_edges(), "why": parsed.error.message,
+		})
 		return false
 
 	browser.add_target(parsed.value as DotBrowserTarget)
@@ -249,4 +270,9 @@ func _join_selected() -> void:
 	# possible failure: the list works, the server is right there, and the connection
 	# times out.
 	browser.note_connected(entry.key())
+	# INFO: the one thing on this screen a person reporting "I joined the wrong room" or
+	# "it never connected" needs in their log — which row, and the address it resolved to.
+	DotLog.info(CHANNEL, "joining", {
+		"name": entry.name, "address": entry.join_address(), "ping_ms": entry.ping_ms,
+	})
 	joined.emit(entry.join_address())

@@ -126,6 +126,13 @@ func start(display_name: String, seed_value: int = 20260829) -> DotResult:
 	if not added.ok:
 		return added
 
+	# DEBUG: a state transition, and the numbers a person comparing two offline runs
+	# needs — a simulated round trip or loss left on is the first thing to rule out when
+	# an offline room "feels laggy". A failure is not logged here: [RoomClient] logs it
+	# at ERROR with the result, and a second line would be the same failure twice.
+	DotLog.debug(CHANNEL, "offline room started", {
+		"latency_ticks": latency_ticks, "loss": loss, "seed": seed_value,
+	})
 	return DotResult.success(self)
 
 
@@ -200,6 +207,11 @@ func _on_place_requested(
 	var placed := server_props.place(occupant.id, prop_id, at, rotation)
 
 	if not placed.ok:
+		# DEBUG: a refusal the player is told about in chat; this is for whoever is
+		# asking why a prop did not appear.
+		DotLog.debug(CHANNEL, "prop refused", {
+			"peer": peer_id, "prop": String(prop_id), "why": placed.error.message,
+		})
 		services.chat.notice(peer_id, placed.error.message, RoomServices.CHANNEL_ALL)
 
 
@@ -216,6 +228,9 @@ func _on_say_requested(peer_id: int, channel_id: StringName, text: String) -> vo
 	var said := services.chat.submit(peer_id, channel_id, text)
 
 	if not said.ok and said.error != null:
+		DotLog.debug(CHANNEL, "chat line refused", {
+			"peer": peer_id, "channel": String(channel_id), "why": said.error.message,
+		})
 		services.chat.notice(peer_id, said.error.message, channel_id)
 
 

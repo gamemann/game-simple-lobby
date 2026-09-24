@@ -61,14 +61,31 @@ func setup() -> DotResult:
 	var profiled: DotResult = await _build_users()
 
 	if not profiled.ok:
+		# ERROR, here rather than only in the caller, because only this file knows which
+		# of the three stores it was — and "profiles" against "avatars" is the difference
+		# between a directory to fix and a schema to fix.
+		DotLog.result(CHANNEL, "profiles could not start", profiled)
 		return profiled
 
 	var dressed: DotResult = await _build_avatars()
 
 	if not dressed.ok:
+		DotLog.result(CHANNEL, "avatars could not start", dressed)
 		return dressed
 
-	return await _build_hub()
+	var joined: DotResult = await _build_hub()
+
+	if not joined.ok:
+		DotLog.result(CHANNEL, "the platform hub could not start", joined)
+		return joined
+
+	# INFO: where a lobby keeps people's profiles is the first thing an admin asks when
+	# one goes missing, and guests being allowed is this deployment's decision, not
+	# dot-user's default.
+	DotLog.info(CHANNEL, "profiles and avatars are up", {
+		"directory": directory, "scope": String(scope), "guests": true,
+	})
+	return joined
 
 
 func _build_users() -> DotResult:

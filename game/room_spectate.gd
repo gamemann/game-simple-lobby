@@ -107,7 +107,16 @@ func tick(_delta: float) -> void:
 func watch(viewer: int, target: int) -> DotResult:
 	if manager == null:
 		return DotResult.fail(DotError.CODE_STATE, "Spectating is not set up.")
-	return manager.watch(str(viewer), str(target))
+	var watched := manager.watch(str(viewer), str(target))
+	# DEBUG either way: a decision, and the one a player reports as "the camera did
+	# nothing" when it was refused.
+	if watched.ok:
+		DotLog.debug(CHANNEL, "watching", {"viewer": viewer, "target": target})
+	else:
+		DotLog.debug(CHANNEL, "watch refused", {
+			"viewer": viewer, "target": target, "why": watched.error.message,
+		})
+	return watched
 
 
 func next_target(viewer: int) -> DotResult:
@@ -117,8 +126,9 @@ func next_target(viewer: int) -> DotResult:
 
 
 func stop(viewer: int) -> void:
-	if manager != null:
+	if manager != null and manager.is_spectating(str(viewer)):
 		manager.stop(str(viewer))
+		DotLog.debug(CHANNEL, "stopped watching", {"viewer": viewer})
 
 
 func is_spectating(viewer: int) -> bool:
@@ -146,7 +156,19 @@ func _on_left(occupant: RoomOccupant) -> void:
 	# After the roster has dropped them, which is what dot-spectate's own note asks for:
 	# the replacement target is chosen from the participants list, so reporting the
 	# departure first picks the occupant who just left.
+	var watchers: Array[int] = []
+	for key: Variant in world.occupants.keys():
+		if watching(int(key)) == occupant.id:
+			watchers.append(int(key))
+
 	manager.on_leave(str(occupant.id))
+
+	# Only when somebody was watching: a camera that moved on its own is what a viewer
+	# asks about, and a leave nobody was watching is the roster's news, not this.
+	for viewer in watchers:
+		DotLog.debug(CHANNEL, "the person being watched left", {
+			"viewer": viewer, "left": occupant.id, "now": watching(viewer),
+		})
 
 
 func describe() -> Dictionary:

@@ -19,7 +19,7 @@ const RoomServices := preload("../room_services.gd")
 ## filtered admin chat server-side. Nothing here re-implements any of that, and nothing
 ## here may: asking a client to hide messages it is not entitled to see is not a control.
 
-const CHANNEL := "room.ui"
+# No CHANNEL: this draws what it is handed and decides nothing an operator acts on; the chat, voice and connection decisions it shows are logged where they are made.
 
 ## Somebody pressed Enter with text in the box.
 signal chat_submitted(text: String)

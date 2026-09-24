@@ -74,6 +74,11 @@ var requests_received: int = 0
 var voice_sent: int = 0
 var voice_received: int = 0
 
+## Sends dropped because there was no connection to send on. Counted per episode.
+var dropped_sends: int = 0
+var _dropping := false
+var _warned_unbridged := false
+
 
 static func attached_to(parent: Node, p_bridge: RoomBridge, server: bool) -> RoomLink:
 	var link := RoomLink.new()
@@ -88,9 +93,30 @@ func _live() -> bool:
 	if loopback.is_valid():
 		return true
 
-	return is_inside_tree() \
+	var live := is_inside_tree() \
 		and multiplayer != null \
 		and multiplayer.has_multiplayer_peer()
+
+	# [b]Logged on the edges, never per send.[/b] A snapshot a tick to every client is
+	# the hottest path in the game, and a line per dropped one would be sixty a second.
+	# DEBUG, because dropping is correct — before a connection and after one, there is
+	# nobody to send to — and what somebody debugging a silent client wants is when it
+	# started and how much went nowhere.
+	if not live:
+		dropped_sends += 1
+		if not _dropping:
+			_dropping = true
+			DotLog.debug(CHANNEL, "no connection: sends are dropped until there is one", {
+				"server": is_server,
+			})
+	elif _dropping:
+		_dropping = false
+		DotLog.debug(CHANNEL, "connected again", {
+			"server": is_server, "dropped": dropped_sends,
+		})
+		dropped_sends = 0
+
+	return live
 
 
 # --- Sending ---------------------------------------------------------------
@@ -192,8 +218,11 @@ func send_request(payload: PackedByteArray) -> void:
 func _net_snapshot(payload: PackedByteArray) -> void:
 	snapshots_received += 1
 
-	if bridge != null:
-		bridge.receive_snapshot(payload)
+	if bridge == null:
+		_note_unbridged(&"snapshot")
+		return
+
+	bridge.receive_snapshot(payload)
 
 
 ## Anything from the authority that must arrive: the hello, the roster, joins and leaves.
@@ -201,8 +230,11 @@ func _net_snapshot(payload: PackedByteArray) -> void:
 func _net_event(payload: PackedByteArray) -> void:
 	events_received += 1
 
-	if bridge != null:
-		bridge.receive_event(payload)
+	if bridge == null:
+		_note_unbridged(&"event")
+		return
+
+	bridge.receive_event(payload)
 
 
 ## A client's intent. Unreliable, and not resent: the next tick's packet carries the newer
@@ -211,10 +243,13 @@ func _net_event(payload: PackedByteArray) -> void:
 func _net_client_input(payload: PackedByteArray) -> void:
 	inputs_received += 1
 
-	if bridge != null:
-		# The sender comes from the transport, never from inside the payload. A peer id in
-		# a body is a claim; this is a fact.
-		bridge.receive_input(multiplayer.get_remote_sender_id(), payload)
+	if bridge == null:
+		_note_unbridged(&"input")
+		return
+
+	# The sender comes from the transport, never from inside the payload. A peer id in
+	# a body is a claim; this is a fact.
+	bridge.receive_input(multiplayer.get_remote_sender_id(), payload)
 
 
 ## A client asking for something. Reliable and rare.
@@ -222,8 +257,11 @@ func _net_client_input(payload: PackedByteArray) -> void:
 func _net_request(payload: PackedByteArray) -> void:
 	requests_received += 1
 
-	if bridge != null:
-		bridge.receive_request(multiplayer.get_remote_sender_id(), payload)
+	if bridge == null:
+		_note_unbridged(&"request")
+		return
+
+	bridge.receive_request(multiplayer.get_remote_sender_id(), payload)
 
 
 ## A voice frame, either way.
@@ -237,8 +275,11 @@ func _net_request(payload: PackedByteArray) -> void:
 func _net_voice(payload: PackedByteArray) -> void:
 	voice_received += 1
 
-	if bridge != null:
-		bridge.receive_voice(multiplayer.get_remote_sender_id(), payload)
+	if bridge == null:
+		_note_unbridged(&"voice")
+		return
+
+	bridge.receive_voice(multiplayer.get_remote_sender_id(), payload)
 
 
 ## Hands a payload to this end as though it had arrived over the wire.
@@ -248,6 +289,7 @@ func _net_voice(payload: PackedByteArray) -> void:
 ## socket.
 func deliver(method: StringName, from_peer_id: int, payload: PackedByteArray) -> void:
 	if bridge == null:
+		_note_unbridged(method)
 		return
 
 	match method:
@@ -268,9 +310,23 @@ func deliver(method: StringName, from_peer_id: int, payload: PackedByteArray) ->
 			bridge.receive_voice(from_peer_id, payload)
 
 
+## A payload arrived with no bridge to hand it to, so it went nowhere.
+##
+## WARN, once per link: a link is attached with its bridge, so this is a node kept past
+## its teardown or wired wrong, and every later payload would say the same thing.
+func _note_unbridged(method: StringName) -> void:
+	if _warned_unbridged:
+		return
+	_warned_unbridged = true
+	DotLog.warn(CHANNEL, "a payload arrived at a link with no bridge and was dropped", {
+		"method": String(method), "server": is_server,
+	})
+
+
 func describe() -> Dictionary:
 	return {
 		"server": is_server,
+		"dropped_sends": dropped_sends,
 		"snapshots": [snapshots_sent, snapshots_received],
 		"events": [events_sent, events_received],
 		"inputs": [inputs_sent, inputs_received],

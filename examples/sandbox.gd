@@ -226,6 +226,8 @@ func _build_server(server_side: Node) -> bool:
 	# A self-test takes no commands. The console's stdin reader blocks in a read nothing
 	# can wake, so on an open pipe that never closes — `sleep 130 | godot ...`, measured —
 	# this suite printed "62 passed, 0 failed" and then never exited.
+	# Kept after dot-server 5f46687, which no longer reads a pipe unless `stdin_console_pipes`
+	# is on: a terminal is still read, and a suite takes no commands from either.
 	config.stdin_console_enabled = false
 
 	_server = DotServer.new()

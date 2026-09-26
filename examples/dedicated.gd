@@ -240,6 +240,8 @@ func _build(serving: bool) -> bool:
 	# process printed its whole result and then never exited. A tty and /dev/null both
 	# exit, which is why it only showed once the suite ran long enough for the reader to
 	# be blocked by the time it quit. `--serve` keeps it, because that one is a server.
+	# Kept after dot-server 5f46687, which no longer reads a pipe unless `stdin_console_pipes`
+	# is on: a terminal is still read, and a suite takes no commands from either.
 	config.stdin_console_enabled = serving
 	# The query listeners. A lobby is the server in this family a person is most likely to
 	# be choosing off a list, and this game has shipped `RoomBrowser` against a server that

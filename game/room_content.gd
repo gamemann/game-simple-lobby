@@ -118,6 +118,28 @@ const FLOOR_GRID := 80.0
 ## them is a thing to stand behind, and a lobby where everybody stands in one place is a
 ## lobby where the roster is the only thing anybody reads.
 static func furniture() -> PackedVector3Array:
+	if _furniture_built:
+		return _furniture_cache
+	_furniture_cache = _build_furniture()
+	_furniture_built = true
+	return _furniture_cache
+
+
+## [method furniture] and [method walls], built once. [b]Both are pure functions of this
+## file's constants[/b] (the alcove's trigonometry included), and they were rebuilt on every
+## call: measured 2026-09-26, rebuilding was 3.4 of `resolve_furniture`'s 5.6 microseconds,
+## which runs per occupant per tick on both ends and again in every client replay, and 2.9
+## of `within_earshot`'s 5.7, which proximity voice asks per speaker per listener at 50 Hz.
+## A packed array is copied on write, so a caller that edits what it was handed edits its
+## own copy. Not simulation state: it is the same answer every call would have built.
+## `[lobby-earshot-cost]`.
+static var _furniture_cache := PackedVector3Array()
+static var _furniture_built := false
+static var _walls_cache := PackedVector3Array()
+static var _walls_built := false
+
+
+static func _build_furniture() -> PackedVector3Array:
 	var out := PackedVector3Array([
 		# The island. Big enough to walk round and small enough to see over.
 		Vector3(0.0, 0.0, 150.0),
@@ -639,6 +661,14 @@ static func in_wing(at: Vector2) -> bool:
 ## either: somebody placing a crate must not be able to wall a person out of the room's
 ## conversation.
 static func walls() -> PackedVector3Array:
+	if _walls_built:
+		return _walls_cache
+	_walls_cache = _build_walls()
+	_walls_built = true
+	return _walls_cache
+
+
+static func _build_walls() -> PackedVector3Array:
 	var out := partition()
 	out.append_array(gallery_screen())
 	out.append_array(snug_screen())

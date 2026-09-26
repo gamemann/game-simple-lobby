@@ -211,18 +211,13 @@ func _test_event_bounds() -> void:
 	_check(not ask.validate().ok, "an unknown ask is refused")
 
 	# [b]Wire ids have to be the same number on two different machines.[/b]
-	# [method DotNetMessageRegistry.seal] assigns them from the sorted type names, and
-	# `Array.sort()` on a `StringName` does NOT sort lexicographically — Godot compares
-	# StringNames by their interned pointer, which is whatever order the names happened to
-	# be created in. Two peers intern them differently, sort them differently, and give
-	# the same message type two different ids while computing two different schema hashes.
-	#
-	# Nothing errors. It was invisible to every suite in this family because they all run
-	# both ends in one process, sharing one intern table and therefore one order; a
-	# browser client is the first peer that is a separate program, and it saw it at once.
-	# Asserting the order is lexicographic is what catches it without two processes.
-	# Registered in reverse: `room.request` first, then `room.event`. A registry that
-	# sorted by interned pointer would keep that order and hand `room.request` id 0.
+	# They used to be assigned from the sorted type names, and `Array.sort()` on a
+	# `StringName` does NOT sort lexicographically -- Godot compares StringNames by their
+	# interned pointer -- so two peers once gave one message type two ids. Since dot-net
+	# derives each id from the type's NAME alone, registration order and the rest of the
+	# set cannot move it; asserting the id is the name's own is what catches a registry
+	# that starts depending on either again, without two processes.
+	# Registered in reverse: `room.request` first, then `room.event`.
 	var registry := DotNetMessageRegistry.new()
 	registry.register(
 		RoomRequest.NAME, RoomRequest, DotNetMessage.Delivery.RELIABLE,
@@ -235,9 +230,10 @@ func _test_event_bounds() -> void:
 	registry.seal()
 
 	_check(
-		registry.id_of(RoomEvent.NAME) == 0 and registry.id_of(RoomRequest.NAME) == 1,
-		"wire ids follow the names in lexicographic order, not the order they were "
-		+ "registered in (event %d, request %d)"
+		registry.id_of(RoomEvent.NAME) == DotNetMessageRegistry.wire_id_for(RoomEvent.NAME)
+			and registry.id_of(RoomRequest.NAME) == DotNetMessageRegistry.wire_id_for(RoomRequest.NAME),
+		"wire ids come from the names alone, not the order they were registered in "
+		+ "(event %d, request %d)"
 			% [registry.id_of(RoomEvent.NAME), registry.id_of(RoomRequest.NAME)],
 		"two peers that disagree about this give one message type two ids, silently"
 	)

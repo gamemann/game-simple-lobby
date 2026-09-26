@@ -13,7 +13,7 @@ const RoomWorld := preload("../game/room_world.gd")
 ## Exits non-zero on any failure. No netcode, no server, no rendering — this is
 ## [RoomWorld] alone, which is the only part of the game that decides anything.
 
-const CHECKS := 84
+const CHECKS := 91
 
 var _passed := 0
 var _failed := 0
@@ -49,6 +49,7 @@ func _run() -> void:
 	_test_gallery()
 	_test_snug()
 	_test_alcove()
+	_test_booth()
 	_test_earshot()
 	_test_reach()
 	_test_determinism()
@@ -539,13 +540,17 @@ func _test_gallery() -> void:
 	# stand behind because it is a room you go to; the gallery IS the thing to stand
 	# behind, and a strip this deep with furniture in it is the wing's own bug written
 	# out a second time.
-	# Anything whose centre is north of the screen's FACE is standing in the strip. The
-	# screen's own posts are on the line and are the wall of it, not furniture in it.
+	# Anything whose centre is north of the screen's FACE, and within the screen's own
+	# width, is standing in the strip. The screen's own posts are on the line and are the
+	# wall of it, not furniture in it. [b]Within its width since 2026-09-26[/b]: the booth's
+	# west arm runs to the north wall at x 640, north of the face and 390 east of the
+	# strip's end, and the check counted five of its posts as furniture in the gallery.
 	var standing := 0
 	var face := RoomContent.GALLERY_Y - RoomContent.GALLERY_POST_RADIUS
 
 	for piece in RoomContent.furniture():
-		if piece.y < face and not RoomContent.in_wing(Vector2(piece.x, piece.y)):
+		var at := Vector2(piece.x, piece.y)
+		if piece.y < face and RoomContent.in_gallery(at) and not RoomContent.in_wing(at):
 			standing += 1
 
 	_check(
@@ -888,6 +893,96 @@ func _test_alcove() -> void:
 	_done()
 
 
+func _test_booth() -> void:
+	_section("the booth in the north-east corner")
+
+	var world := _world(&"booth")
+	world.add_occupant(1, "Stroller")
+	var walker := world.occupant_for(1)
+	var door := RoomContent.booth_door()
+
+	# In through the doorway on one held direction, touching nothing, and out again.
+	for way in [Vector2.UP, Vector2.DOWN]:
+		var from := door + Vector2(0.0, 200.0 if way == Vector2.UP else -150.0)
+		walker.state.position = from
+		walker.state.velocity = Vector2.ZERO
+		var drift := 0.0
+
+		for _i in range(600):
+			world.tick({1: _walk(way)})
+			drift = maxf(drift, absf(walker.position().x - door.x))
+			var past := walker.position().y < door.y - 120.0 if way == Vector2.UP \
+				else walker.position().y > door.y + 120.0
+			if past:
+				break
+
+		var inside := RoomContent.in_booth(walker.position())
+		_check(
+			(inside if way == Vector2.UP else not inside) and drift < 0.5,
+			"holding %s through the booth's doorway goes %s touching nothing (%.1f off the line)"
+				% ["north" if way == Vector2.UP else "south",
+					"in" if way == Vector2.UP else "out", drift]
+		)
+
+	# Its walls are walls: straight at the south arm beside the doorway, and at the west arm.
+	for probe in [
+		# At a post's centre, head on: aimed between two it slides along the arm into
+		# the doorway, which is the doorway working.
+		[Vector2(RoomContent.BOOTH_X + RoomContent.BOOTH_SPACING, -230.0), Vector2.UP, "south arm"],
+		[Vector2(RoomContent.BOOTH_X - 150.0, -450.0), Vector2.RIGHT, "west arm"],
+	]:
+		walker.state.position = probe[0]
+		walker.state.velocity = Vector2.ZERO
+
+		for _i in range(600):
+			world.tick({1: _walk(probe[1])})
+
+		_check(
+			not RoomContent.in_booth(walker.position()),
+			"walking into its %s does not go through (%.0f, %.0f)"
+				% [probe[2], walker.position().x, walker.position().y]
+		)
+
+	# No hole, and nothing about it narrower than the front door, walls included.
+	var screen := RoomContent.booth_screen()
+	var narrowest := INF
+	var where := ""
+	var room := RoomContent.bounds()
+
+	for piece in screen:
+		var at := Vector2(piece.x, piece.y)
+
+		for other in RoomContent.furniture():
+			if other in screen:
+				continue
+			var gap := at.distance_to(Vector2(other.x, other.y)) - piece.z - other.z
+			if gap < narrowest:
+				narrowest = gap
+				where = "(%.0f, %.0f) to (%.0f, %.0f)" % [at.x, at.y, other.x, other.y]
+
+	var south: Array[float] = []
+	for piece in screen:
+		if is_equal_approx(piece.y, RoomContent.BOOTH_Y):
+			south.append(piece.x)
+	south.sort()
+	var widest := 0.0
+	for index in range(1, south.size()):
+		widest = maxf(widest, south[index] - south[index - 1] - RoomContent.BOOTH_POST_RADIUS * 2.0)
+
+	_check(
+		absf(widest - RoomContent.DOORWAY_SPAN) < 0.01 and south[south.size() - 1]
+			+ RoomContent.BOOTH_POST_RADIUS >= room.end.x,
+		"its one doorway is the front door's width, and the south arm runs into the east wall (%.1f)"
+			% widest
+	)
+	_check(
+		narrowest >= RoomContent.DOORWAY_SPAN - 0.01,
+		"and it leaves nothing in the hall narrower than the front door (%.1f, %s)"
+			% [narrowest, where]
+	)
+	_done()
+
+
 ## Who can hear whom, as the room decides it. See [method RoomContent.within_earshot].
 ##
 ## [b]Pure geometry, and the sandbox is where it meets the routers.[/b] This is the rule on
@@ -947,6 +1042,15 @@ func _test_earshot() -> void:
 		),
 		"and two people inside it hear each other"
 	)
+
+	# Straight through a post of the south arm, and then across the booth's floor.
+	var in_booth := Vector2(RoomContent.BOOTH_X + RoomContent.BOOTH_SPACING, -450.0)
+	_check(
+		RoomContent.in_booth(in_booth)
+			and deaf.call(in_booth, Vector2(in_booth.x, -220.0))
+			and hears.call(in_booth, Vector2(860.0, -500.0)),
+		"inside the booth is out of earshot of the hall, and two people in it hear each other"
+	)
 	_done()
 
 
@@ -1000,6 +1104,7 @@ func _test_reach() -> void:
 	var reached := 0
 	var reached_snug := false
 	var reached_alcove := false
+	var reached_booth := false
 	var head := 0
 
 	while head < queue.size():
@@ -1014,6 +1119,9 @@ func _test_reach() -> void:
 
 		if RoomContent.in_alcove(inner.position + Vector2(column, row) * STEP):
 			reached_alcove = true
+
+		if RoomContent.in_booth(inner.position + Vector2(column, row) * STEP):
+			reached_booth = true
 
 		for step in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
 			var c: int = column + step.x
@@ -1046,7 +1154,7 @@ func _test_reach() -> void:
 		reached_snug,
 		"the flood from the hall gets into the snug"
 	)
-	_check(reached_alcove, "and into the alcove")
+	_check(reached_alcove and reached_booth, "and into the alcove and the booth")
 	_check(
 		reached == total,
 		"and every point a walker fits at is one it can get to (%d of %d%s)"

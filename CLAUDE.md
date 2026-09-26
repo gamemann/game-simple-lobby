@@ -351,6 +351,16 @@ The south-west quarter of the hall had a pillar in it and nothing else, and ever
 
 With the earshot rule below it is also the one place in the hall's south half a conversation can be had out of: a line from the hall into it crosses the bow.
 
+#### The booth: the one place off the hall with a single door (2026-09-26)
+
+Every other place off the hall is open at both ends: the wing, the gallery, the snug and the alcove each have two ways through. That makes each a circuit rather than a pocket, but it also means any conversation in them is one somebody can walk through. **The booth is the private one.** An L of `BOOTH_POST_RADIUS` posts closes off the north-east corner, the one part of the room nothing used. The west arm runs from `BOOTH_X` up to the north wall and the south arm along `BOOTH_Y` to the east wall. `BOOTH_DOOR_POSTS` leaves one doorway in the south arm exactly `DOORWAY_SPAN` wide. Out of earshot of the hall by line of sight, and anybody joining has to come through the door everybody in it can see.
+
+**One door is safe here, which the wing's lesson says it would not be anywhere else.** A room with one door and somebody standing in it is a room you cannot leave, and that is why the wing got its north gate. The booth is the deliberate exception: it is small and empty, so there is nothing to stand at in the doorway, and a private room with two doors is not private.
+
+**Placed by its neighbours and by its own spacing.** At `BOOTH_X` 670 the west arm is 134 from the north-east pillar and the south arm 120 from the north bench, both more than the front door. The south arm's last post exactly touches the east wall (670 + 5 × 40 + 30 = 900). Both arms end with a post touching their wall, not straddling it: centred on the wall, the first draft drew half a post outside the room. Pulling that post back at 640 left the doorway 90 wide. Moving the doorway west to make up for it put it into the north bench's lane, and the walk through it drifted 20.7. Each of those was a failed check or a picture, and 670 is where all three agree.
+
+`headless_room`'s **the booth in the north-east corner** walks in through the doorway and out again on one held direction each (0.0 off the line), walks head-on into each arm and is stopped, and asserts the doorway is exactly the front door's width, that the south arm reaches the east wall, and that nothing about it is narrower than the front door. Its earshot check puts somebody inside, deaf to the hall through a post of the south arm, and hearing somebody across the booth. The flood reaches it. Armed by leaving it out of `furniture()` and `walls()`: three checks fail. Building it also found that the gallery's "nothing stands inside it" counted any post north of the screen's face across the whole room; it counts within the screen's width now (`in_gallery`). `tools/screenshot.sh`'s staged sign had stood where the west arm now is, and it stands inside the booth now.
+
 ##### The check it found: a crowded level that `headless_net` promised to fail on, and passed
 
 `headless_net`'s **under loss** section walks along `_clear_heading`, which scans 64 headings from the spawn for one clear of furniture for 480 units. Its comment says that if there is none, *"a level this crowded is a level worth failing on rather than one to quietly measure a grinding walk in"*. The code under that comment called `push_error` and returned `Vector2.RIGHT`. A `push_error` is a line on stderr and changes no exit code, so with no clear heading anywhere (forced by lengthening the reach) the suite walked due east into the wall, measured a correction rate against it, and exited 0 with **65 passed, 0 failed**. The one outcome the comment ruled out.
@@ -514,7 +524,7 @@ tools/check.sh                # every suite ci.yml names, after a parse pass
 
 | | | |
 | --- | --- | --- |
-| `headless_room` | 84 | the room alone. Membership, walls, every level walked by a held direction, a flood over the whole floor for sealed pockets, and two worlds replaying the same commands bit-identically |
+| `headless_room` | 91 | the room alone. Membership, walls, every level walked by a held direction, a flood over the whole floor for sealed pockets, and two worlds replaying the same commands bit-identically |
 | `headless_stack` | 24 | the player layer: the collision layout, the two sides, the class as a choice nothing applies, and the ring of seats — filled past eight, because two arrivals cannot tell a seat chooser from a coin |
 | `headless_presentation` | 88 | settings, audio, effects, the console and the party — **none of which `headless_room` can reach**, because that one is `RoomWorld` alone and has no client in it |
 | `headless_net` | 88 | every encoder against its decoder, then a session over a lossy delaying loopback, then a walk into the furniture, and a gag that reaches the offline chat |

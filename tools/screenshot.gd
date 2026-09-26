@@ -103,7 +103,8 @@ func _initialize() -> void:
 	# The two that are not obstacles. A rug drawn at an obstacle's weight would be a rug
 	# people believe they have to walk around.
 	props.place(3, &"rug", Vector2(120.0, 300.0))
-	props.place(3, &"sign", Vector2(620.0, -420.0))
+	# Inside the booth (2026-09-26): at (620, -420) it stood on the booth's west arm.
+	props.place(3, &"sign", Vector2(780.0, -450.0))
 
 	var renderer := Node2D.new()
 	renderer.set_script(load(RENDERER))

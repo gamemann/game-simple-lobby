@@ -188,6 +188,12 @@ static func furniture() -> PackedVector3Array:
 	# each end of it against the wall. See [constant ALCOVE_RADIUS].
 	out.append_array(alcove_screen())
 
+	# --- The booth in the north-east corner ----------------------------------
+	#
+	# An L of posts closing the corner off, with one doorway in its south arm. See
+	# [constant BOOTH_X].
+	out.append_array(booth_screen())
+
 	return out
 
 
@@ -449,6 +455,81 @@ static func in_snug(at: Vector2) -> bool:
 	return at.x > SNUG_X and at.y > SNUG_Y
 
 
+# --- The booth -------------------------------------------------------------
+
+## The line the booth's west arm stands on.
+##
+## [b]Added 2026-09-26: the one space in the room with a door and no other way in.[/b]
+## Every other place off the hall is open at both ends (the wing, the gallery, the snug and
+## the alcove each have two ways through), so a conversation in any of them is one
+## somebody can walk through. The booth is the private one: out of earshot of the hall by
+## line of sight, and the only way to join it is its doorway, which everybody in it can
+## see.
+##
+## [b]Placed by its neighbours and by its own spacing.[/b] At 670 the west arm's face is
+## 134 from the north-east pillar (460, -280), more than the front door, and the south
+## arm's posts land with the last one exactly touching the east wall (670 + 5 x 40 + 30 =
+## 900). At 640 the last post straddled the wall, and pulling it back left the doorway 90;
+## the doorway moved west to make up for it, into the north bench's lane. The corner is
+## the one part of the room nothing else uses.
+const BOOTH_X := 670.0
+
+## The line the booth's south arm stands on. At -320 its face is 120 from the north bench
+## (700, -110); a post-width further south is an 80 slot between the two.
+const BOOTH_Y := -320.0
+
+## The booth's posts: the snug's, for the snug's reason.
+const BOOTH_POST_RADIUS := 30.0
+
+## Centre to centre, overlapping by [constant GALLERY_OVERLAP] like every screen here.
+const BOOTH_SPACING := BOOTH_POST_RADIUS * 2.0 - GALLERY_OVERLAP
+
+## The posts left out of the south arm to make its doorway, counted from the corner.
+## Three at this spacing leave exactly [constant DOORWAY_SPAN] between the two either
+## side, so the booth's door is the room's door.
+const BOOTH_DOOR_POSTS: Array[int] = [2, 3, 4]
+
+
+## The booth's posts: the corner, the south arm eastward to the east wall with its
+## doorway, then the west arm northward to the north wall.
+##
+## Both arms run up to a wall rather than stopping short of one: a gap between an arm's
+## end and the wall is a second door, which is the one thing the booth may not have. The
+## last post of each is pulled back to TOUCH its wall, not straddle it: centred on the
+## wall it was drawn half outside the room, and a tangent post leaves a gap of nothing,
+## which no walker fits through.
+static func booth_screen() -> PackedVector3Array:
+	var out := PackedVector3Array()
+	var east := int(ceil((ROOM_EXTENT.x - BOOTH_X) / BOOTH_SPACING))
+	var north := int(ceil((BOOTH_Y + ROOM_EXTENT.y) / BOOTH_SPACING))
+
+	out.append(Vector3(BOOTH_X, BOOTH_Y, BOOTH_POST_RADIUS))
+
+	for index in range(1, east):
+		if index in BOOTH_DOOR_POSTS:
+			continue
+		var x := minf(BOOTH_X + BOOTH_SPACING * index, ROOM_EXTENT.x - BOOTH_POST_RADIUS)
+		out.append(Vector3(x, BOOTH_Y, BOOTH_POST_RADIUS))
+
+	for index in range(1, north + 1):
+		var y := maxf(BOOTH_Y - BOOTH_SPACING * index, -ROOM_EXTENT.y + BOOTH_POST_RADIUS)
+		out.append(Vector3(BOOTH_X, y, BOOTH_POST_RADIUS))
+
+	return out
+
+
+## The middle of the booth's doorway, on its south arm.
+static func booth_door() -> Vector2:
+	var first: int = BOOTH_DOOR_POSTS[0]
+	var last: int = BOOTH_DOOR_POSTS[BOOTH_DOOR_POSTS.size() - 1]
+	return Vector2(BOOTH_X + BOOTH_SPACING * (first + last) * 0.5, BOOTH_Y)
+
+
+## Whether [param at] is inside the booth: past both arms' lines.
+static func in_booth(at: Vector2) -> bool:
+	return at.x > BOOTH_X and at.y < BOOTH_Y
+
+
 # --- The alcove ------------------------------------------------------------
 
 ## Where the alcove's bow is centred, on the south wall: the x of a point ON the wall.
@@ -562,6 +643,7 @@ static func walls() -> PackedVector3Array:
 	out.append_array(gallery_screen())
 	out.append_array(snug_screen())
 	out.append_array(alcove_screen())
+	out.append_array(booth_screen())
 	return out
 
 

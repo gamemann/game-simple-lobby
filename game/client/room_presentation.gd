@@ -84,6 +84,26 @@ func setup() -> DotResult:
 	return DotResult.success(null)
 
 
+## The client's voice, which is built after this layer and so is handed over rather than
+## found. Applies the current settings at once: a value loaded from disk has not
+## "changed", and the voice would otherwise keep its defaults until the player touched one.
+func bind_voice(p_voice: Node) -> void:
+	voice = p_voice
+	_apply_voice()
+
+
+## The client's [RoomVoice], once [method bind_voice] has run. Null before, and on a build
+## with no audio.
+var voice: Node = null
+
+
+func _apply_voice() -> void:
+	if voice == null or settings == null:
+		return
+	voice.call("set_push_to_talk", settings.get_bool(&"push_to_talk", true))
+	voice.call("set_nearby", settings.get_bool(&"voice_nearby", false))
+
+
 ## Pushes every current setting at whatever reads it.
 func apply_all() -> void:
 	for key in settings.schema.keys():
@@ -101,6 +121,12 @@ static func schema() -> DotSettingsSchema:
 	s.add(DotSettingsDef.number(&"voice_volume", 1.0, 0.0, 1.0, &"audio"))
 	s.add(DotSettingsDef.boolean(&"push_to_talk", true, &"audio").with_description(
 		"Off uses voice activation, which a noisy room should not."
+	))
+	# Off by default, the way text chat's default channel is the whole room: a lobby is one
+	# conversation until somebody chooses otherwise. On, the walls count, and the booth is
+	# private for voice as it is for near chat.
+	s.add(DotSettingsDef.boolean(&"voice_nearby", false, &"audio").with_description(
+		"Only people within earshot hear you, and walls stop it."
 	))
 
 	# ACCOUNT scope: a lobby is where somebody configures themselves before going
@@ -176,6 +202,8 @@ func _on_setting_changed(key: StringName, value: Variant, _why: StringName) -> v
 		&"allow_flashes":
 			if fx != null:
 				fx.config.allow_flashes = bool(value)
+		&"push_to_talk", &"voice_nearby":
+			_apply_voice()
 		&"chat_open_key":
 			# Empty is left alone rather than applied: a settings file somebody cleared
 			# the field in would otherwise leave a chat room with no way into its own

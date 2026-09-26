@@ -23,7 +23,9 @@ const RoomWorld := preload("../game/room_world.gd")
 ##
 ## Exits non-zero on any failure.
 
-const CHECKS := 88
+const RoomVoice := preload("../game/client/room_voice.gd")
+
+const CHECKS := 91
 
 var _passed := 0
 var _failed := 0
@@ -133,6 +135,27 @@ func _test_settings_reach_the_mixer() -> void:
 	)
 	p.settings.set_value(&"allow_flashes", false)
 	_check(not p.fx.config.allow_flashes, "and the flash switch does too")
+
+	# Voice: a real RoomVoice, listening only (no microphone in a headless run), bound the
+	# way the client binds it. `push_to_talk` was on the settings screen and read by nothing.
+	p.settings.set_value(&"voice_nearby", true)
+	var voice := RoomVoice.new()
+	add_child(voice)
+	var _listening := voice.setup(false)
+	p.bind_voice(voice)
+	_check(
+		voice.is_nearby(),
+		"a voice_nearby saved before the voice existed reaches it when it is bound"
+	)
+	p.settings.set_value(&"voice_nearby", false)
+	_check(not voice.is_nearby(), "and turning it off sends to the whole room again")
+	p.settings.set_value(&"push_to_talk", false)
+	_check(
+		voice.manager != null and not voice.manager.config.push_to_talk
+			and (voice.manager.gate == null or not voice.manager.gate.push_to_talk),
+		"and push to talk off reaches the voice gate"
+	)
+	voice.queue_free()
 
 	# A server may cap how far a voice carries, and may not have the volume.
 	var applied := p.on_server_clamps({"near_range": 200.0, "master_volume": 0.1})

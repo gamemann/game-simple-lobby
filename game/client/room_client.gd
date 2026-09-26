@@ -193,6 +193,9 @@ func _build_voice() -> void:
 
 	voice.setup(not DotPlatform.is_headless())
 
+	if presentation != null:
+		presentation.bind_voice(voice)
+
 	bridge.voice_arrived.connect(voice.receive)
 	voice.talking_changed.connect(func(talking: bool) -> void:
 		ui.set_talking(talking)

@@ -148,6 +148,31 @@ func set_talking(pressed: bool) -> void:
 	talking_changed.emit(pressed)
 
 
+## The `push_to_talk` setting. Off, the gate opens on the voice itself.
+##
+## [b]Declared in the lobby's settings and read by nothing until 2026-09-26[/b]: the
+## switch was on the settings screen and every value of it was push to talk.
+func set_push_to_talk(on: bool) -> void:
+	if manager == null:
+		return
+	manager.config.push_to_talk = on
+	if manager.gate != null:
+		manager.gate.push_to_talk = on
+
+
+## The `voice_nearby` setting: heard only by people within earshot, walls included
+## ([constant DotVoiceRouter.Channel.PROXIMITY], which the server answers through
+## [method RoomContent.within_earshot]), or by the whole room. `[lobby-voice-default]`.
+func set_nearby(on: bool) -> void:
+	if manager == null:
+		return
+	manager.channel = DotVoiceRouter.Channel.PROXIMITY if on else DotVoiceRouter.Channel.ALL
+
+
+func is_nearby() -> bool:
+	return manager != null and manager.channel == DotVoiceRouter.Channel.PROXIMITY
+
+
 ## Everything goes quiet: the window lost focus, the chat box took the keyboard, the
 ## client disconnected.
 ##

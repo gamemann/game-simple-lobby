@@ -635,9 +635,16 @@ Three decisions in it are this lobby's rather than the addons':
   twenty people typing is twenty notification sounds a second, which is not a busy room,
   it is a fire alarm. A whisper and a line with your name in it are louder and higher
   priority, because both are addressed to you.
-- **`near_range` is the only setting a server may clamp.** A room that wants everybody to
-  hear everybody caps how far a voice carries; a server that could read the volume, the
-  audio device or the key bindings would be assembling a fingerprint that survives a new
+- **No setting is SERVER_CLAMPED, and there is no `near_range` setting** (`[lobby-near-range-1]`).
+  There used to be one, "how far a voice carries", and nothing read it. The radius that
+  decides who hears is the server's: `RoomServices.NEAR_RANGE` is both the near channel's
+  radius and the voice router's `proximity_range`, and a listener's preference cannot
+  change who a server routes a line to. So it was removed rather than wired. If an
+  operator should be able to change the radius, it belongs as a server cvar, not a player
+  setting. Old saves carrying `near_range` still load: DotSettingsManager keeps keys the
+  schema does not declare and writes them back untouched (`headless_presentation` checks
+  this). The server still may not touch the volume, the audio device or the key bindings;
+  a server that could read those would be assembling a fingerprint that survives a new
   account.
 - **`show_timestamps` and `chat_lines` are ACCOUNT-scoped.** A lobby is where somebody
   configures themselves before going somewhere else, so the settings that are about *them*

@@ -92,9 +92,14 @@ func _test_schema() -> void:
 		s.keys_in_scope(DotSettingsDef.Scope.ACCOUNT).size() >= 2,
 		"with the ones about the person scoped to follow them between games"
 	)
+	# There used to be exactly one, `near_range`, and it was read by nothing: how far a voice
+	# carries is the server's radius (RoomServices.NEAR_RANGE), which decides who hears, so
+	# a player's value could never have mattered. Nothing here is a server's to cap now, and
+	# a setting that turns up in this scope should come with something that reads it.
 	_check(
-		s.keys_in_scope(DotSettingsDef.Scope.SERVER_CLAMPED).has(&"near_range"),
-		"and exactly one a server may cap, which is the one about how far a voice carries"
+		s.keys_in_scope(DotSettingsDef.Scope.SERVER_CLAMPED).is_empty()
+			and not s.has(&"near_range"),
+		"and none a server may cap, because the server's own radius decides who hears"
 	)
 	_check(
 		not s.keys_in_scope(DotSettingsDef.Scope.SERVER_CLAMPED).has(&"master_volume"),
@@ -158,17 +163,26 @@ func _test_settings_reach_the_mixer() -> void:
 	)
 	voice.queue_free()
 
-	# A server may cap how far a voice carries, and may not have the volume.
+	# A server may cap nothing here: not the volume, and not a near_range that is gone.
 	var applied := p.on_server_clamps({"near_range": 200.0, "master_volume": 0.1})
-	_check(applied.size() == 1 and applied[0] == "near_range", "a server caps only what it may")
+	_check(applied.is_empty(), "a server caps nothing, because nothing is its to cap")
 	_check(
 		is_equal_approx(p.settings.get_float(&"master_volume"), 0.25),
 		"and the volume it asked for is untouched"
 	)
-	p.settings.set_value(&"near_range", 120.0)
+
+	# A save from before near_range was removed still loads, and keeps the key: the
+	# manager treats it as a setting this build does not declare and writes it back.
+	var old_save := DotSettingsStoreMemory.new()
+	old_save.save_document(p.settings.app_namespace, p.settings.profile, {
+		"version": 1, "values": {"master_volume": 0.4, "near_range": 300.0},
+	})
+	p.settings.local_store = old_save
+	var loaded := p.settings.load_now()
 	_check(
-		is_equal_approx(p.settings.get_float(&"near_range"), 120.0),
-		"a player below the cap keeps their own value, because a clamp is a bound"
+		loaded.ok and is_equal_approx(p.settings.get_float(&"master_volume"), 0.4)
+			and p.settings.to_document().get("near_range") == 300.0,
+		"an old save carrying near_range loads, and keeps it for the build that knew it"
 	)
 
 	p.queue_free()

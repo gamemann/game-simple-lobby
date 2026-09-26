@@ -151,11 +151,13 @@ static func schema() -> DotSettingsSchema:
 		DotSettingsDef.Scope.ACCOUNT
 	))
 
-	# The only one a server may touch here, and it is the only one worth touching: a room
-	# that wants everybody to hear everybody caps the proximity range at its own width.
-	s.add(DotSettingsDef.number(&"near_range", 420.0, 60.0, 2000.0, &"chat").with_scope(
-		DotSettingsDef.Scope.SERVER_CLAMPED
-	))
+	# [b]There is deliberately no `near_range` here, and so nothing a server may clamp.[/b]
+	# How far a voice or a near line carries is decided by the server, not by the listener
+	# or the speaker: `RoomServices.NEAR_RANGE` is the near channel's radius and the voice
+	# router's proximity range. A player's own value was read by nothing and could not
+	# have mattered. If an operator should be able to change the radius, it belongs as a
+	# server cvar. Old saves that still carry `near_range` load fine: DotSettingsManager
+	# keeps unknown keys and writes them back untouched.
 
 	s.add(DotSettingsDef.number(&"shake_scale", 1.0, 0.0, 2.0, &"accessibility")
 		.with_description("Zero turns camera shake off entirely."))

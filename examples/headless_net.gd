@@ -5,6 +5,7 @@ const RoomEvent := preload("../game/room_event.gd")
 const RoomEvents := preload("../game/room_events.gd")
 const RoomNetCommand := preload("../game/room_net_command.gd")
 const RoomOffline := preload("../game/room_offline.gd")
+const RoomServices := preload("../game/room_services.gd")
 const RoomRequest := preload("../game/room_request.gd")
 
 ## The netcode, over a lossy loopback: encoders, membership, prediction, interpolation.
@@ -29,7 +30,7 @@ const CLIENT_ID := RoomOffline.CLIENT_OCCUPANT
 ## A second person, with no connection. Peer 0, and the thing peer 0 must never mean.
 const GUEST_ID := 500002
 
-const CHECKS := 84
+const CHECKS := 88
 
 var _passed := 0
 var _failed := 0
@@ -57,6 +58,7 @@ func _run() -> void:
 	await _test_second_person()
 	await _test_blind_and_beacon()
 	await _test_leaving()
+	await _test_offline_gag()
 	await _test_loss()
 	await _test_furniture()
 
@@ -882,6 +884,63 @@ func _test_leaving() -> void:
 		pair.client_bridge.entity_count() == 1,
 		"leaving exactly one entity (%d)" % pair.client_bridge.entity_count()
 	)
+	_done()
+
+
+## A gag, offline, where the services are scoped and nothing else about moderation is.
+##
+## [b]The chat router has to look its mute source up under the name moderation publishes
+## it under[/b], which is `dot_mute_source` with no scope: dot-moderation's manager has no
+## scope to add. `RoomServices` used to scope the router's lookup whenever it was itself
+## scoped — which `--offline` always is — so the router asked for
+## `dot_mute_source:offline`, found nothing, and gagged nobody, silently: nothing is
+## registered under that name, which is a legitimate state and not one it warns about.
+## That is dot-game's "a chat router that cannot find its mute source enforces no gag for
+## the life of the server", by a name rather than by an order, and [DotGameServices] looks
+## the name up unscoped. The second check is the one that fails on the old lookup.
+##
+## Written to a directory of its own: a gag in the real offline file would follow whoever
+## runs the suite into their next offline session.
+func _test_offline_gag() -> void:
+	_section("a gag, offline")
+
+	var dir := "user://headless_net_gag"
+	DirAccess.make_dir_recursive_absolute(dir)
+	RoomOffline.punishments_file = "%s/punishments.json" % dir
+	var pair := _offline()
+	RoomOffline.punishments_file = "user://room_punishments_offline.json"
+
+	if not _check(await _joined(pair), "the session comes up"):
+		_done()
+		return
+
+	var chat: DotChatRouter = pair.services.chat
+	var moderation: DotModerationManager = pair.services.moderation
+	var before: DotResult = chat.submit(CLIENT_PEER, RoomServices.CHANNEL_ALL, "before the gag")
+
+	_check(before.ok, "a line is accepted before anything is issued")
+	_check(
+		DotRegistry.get_service(chat.mute_service) == moderation,
+		"the router's mute source is this session's moderation",
+		"'%s' resolves to %s" % [String(chat.mute_service), DotRegistry.get_service(chat.mute_service)]
+	)
+
+	var subject := moderation.subject_for_peer(CLIENT_PEER)
+	var issued: DotResult = await moderation.issue(
+		DotPunishment.Kind.GAG, subject, "a test", "console", 60, 100
+	)
+	var after: DotResult = chat.submit(CLIENT_PEER, RoomServices.CHANNEL_ALL, "after the gag")
+
+	_check(
+		issued.ok and not after.ok,
+		"and a gag issued against them refuses their next line",
+		"issued=%s, the line was %s" % [issued.ok, "refused" if not after.ok else "ACCEPTED"]
+	)
+
+	var _lifted: DotResult = await moderation.revoke_all(subject, DotPunishment.Kind.GAG, "console", 100)
+	pair.queue_free()
+	DirAccess.remove_absolute("%s/punishments.json" % dir)
+	DirAccess.remove_absolute(dir)
 	_done()
 
 

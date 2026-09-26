@@ -47,6 +47,11 @@ signal roster_complete()
 ## to change to add a channel.
 signal say_requested(peer_id: int, channel_id: StringName, text: String)
 
+## A peer that has a place in the room said it can receive, and has been sent the hello and
+## the roster. Server side. What a welcome waits for: anything sent before it lands on a
+## scene the client has not built yet.
+signal peer_admitted(peer_id: int, occupant_id: int)
+
 ## Somebody asked to put something in the room, or to take the last one back. Server side.
 signal place_requested(peer_id: int, prop_index: int, at: Vector2, rotation: float)
 signal undo_requested(peer_id: int)
@@ -136,10 +141,11 @@ var _client_ticked_for: int = -1
 ##
 ## [param link_parent] is [DotServer] on a server and [DotClientLink] on a client, and both
 ## of them are named [code]Server[/code] — see [RoomLink] for why that is the whole of the
-## routing.
-func attach(p_world: RoomWorld, p_net: DotNetManager, link_parent: Node) -> DotResult:
-	if p_world == null or p_net == null or link_parent == null:
-		return DotResult.fail(DotError.CODE_INVALID, "A bridge needs all three.")
+## routing. Null leaves the link for [method open_link], which is the order
+## [DotGameNetcode] calls them in on a dedicated server.
+func attach(p_world: RoomWorld, p_net: DotNetManager, link_parent: Node = null) -> DotResult:
+	if p_world == null or p_net == null:
+		return DotResult.fail(DotError.CODE_INVALID, "A bridge needs a world and a manager.")
 
 	if p_world.is_authority != p_net.is_server:
 		# A world that thinks it is authoritative behind a client manager would place
@@ -173,8 +179,16 @@ func attach(p_world: RoomWorld, p_net: DotNetManager, link_parent: Node) -> DotR
 		world.occupant_joined.connect(_on_occupant_joined)
 		world.occupant_left.connect(_on_occupant_left)
 
-	link = RoomLink.attached_to(link_parent, self, net.is_server)
+	if link_parent != null:
+		open_link(link_parent)
+
 	return DotResult.success(self)
+
+
+## Puts the link where RPCs will find it: under the node named `Server` on this end.
+func open_link(link_parent: Node) -> void:
+	if link == null and link_parent != null and net != null:
+		link = RoomLink.attached_to(link_parent, self, net.is_server)
 
 
 ## Moves this bridge onto a new world, keeping every connection. Server side.
@@ -458,6 +472,7 @@ func _admit(peer_id: int, occupant_id: int) -> void:
 
 	_send_hello(peer_id, occupant_id)
 	_send_roster(peer_id)
+	peer_admitted.emit(peer_id, occupant_id)
 
 
 # --- Replicated occupants --------------------------------------------------

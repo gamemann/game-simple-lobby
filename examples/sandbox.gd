@@ -32,7 +32,7 @@ const PORT := 27086
 const SERVER_DIR := "user://room_sandbox"
 
 ## Every check this suite runs, section counter included. See docs/testing.md.
-const CHECKS := 81
+const CHECKS := 82
 
 var _passed := 0
 var _failed := 0
@@ -585,6 +585,25 @@ func _test_two_people() -> void:
 		grace_to_ada != null and grace_to_ada.bubble_text == "hello from Grace",
 		"over the right head"
 	)
+
+	# The backlog, which is what makes walking in mid-conversation different from walking
+	# into a silence — sent ONCE, and only after the newcomer has said it can receive.
+	# Counted rather than looked for: [DotGameServices.add_peer] sends it the moment the
+	# roster seats somebody unless `_peer_can_receive` says no, and `RoomModule._welcome`
+	# sends it again once they are ready, so a `RoomServices` that stopped answering no is
+	# a newcomer who reads the room's history twice (or has half of it lost to a scene that
+	# did not exist yet). By
+	# now "hello from Grace" has come back on the same ordered connection, so a second
+	# copy would already be here.
+	var backlog := 0
+	for message in _other_heard:
+		if message.text == "hello from Ada":
+			backlog += 1
+
+	_check(
+		backlog == 1,
+		"and what was said before they arrived reaches the newcomer exactly once (%d)" % backlog
+	)
 	_done()
 
 
@@ -909,7 +928,7 @@ func _test_voice() -> void:
 		DotVoiceSourceBuffer.tone(440.0, config.frame_ms / 1000.0, config.sample_rate)
 	)
 
-	var before := services.voice.relayed_packets
+	var before: int = services.voice.relayed_packets
 
 	# [b]Several, because a jitter buffer is not a pipe.[/b] It holds `jitter_ms` worth of
 	# frames before it plays any of them — three at this configuration — so one packet
@@ -979,7 +998,7 @@ func _test_voice() -> void:
 		DotVoiceCodec.instance_for(config.codec_id).bytes_for(wrong.sample_count)
 	)
 
-	var refused_before := services.voice.refused_format
+	var refused_before: int = services.voice.refused_format
 	_client.bridge.link.send_voice(1, wrong.to_bytes())
 	await _settle(20)
 

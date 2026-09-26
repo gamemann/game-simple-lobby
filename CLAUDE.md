@@ -23,6 +23,44 @@ prediction and chat, and every one of those is something every other game also h
 right.
 
 
+## On dot-game's two bases
+
+`RoomModule` extends `DotGameModule` and `RoomServices` extends `DotGameServices` (2026-09-25), the first of the five hand-written games moved onto either. dot-game was extracted from them; until now it ran only in the two games written after it.
+
+**Measured, in lines, against the last commit before the move:**
+
+| | before | after | code only (no comments, no blanks) |
+| --- | --- | --- | --- |
+| `room_module.gd` | 1,191 | 1,074 | 571 → 487 |
+| `room_services.gd` | 735 | 531 | 300 → 234, *with* the live tools moved into it from the module |
+| both | 1,926 | 1,605 | 871 → 721 |
+
+That is still far more than the mg-* games' ninety and sixty, and the difference is the point rather than a failure of the extraction: what is left is this game's. The props and their four signal paths, nine console commands and the punishment parser, the avatar integration, the `player_chat` cancel and forward, the query provider, the game change that rebinds a module built to outlive its world, and four chat channels, the chat rules and the voice format as statics both ends read. What went is the netcode build and its four settings, the seal, the spawn lookup, the roster bookkeeping, the tick counter, the reverse teardown, the moderation manager, the chat router's wiring, the website relay (about a hundred lines, the base's own almost word for word), the live tools' construction and command binding, and the relay's permission and audit seams.
+
+**What is still overridden, and why each one is this game's rather than the base's:**
+
+- `_chat_peers` is `RoomBridge.ready_peers()`, not dot-server's playing sessions: a session exists from the moment a socket connects, and a line routed to a peer whose scene is not built is a "Node not found".
+- `_key_of` is the occupant, and `_subject_for_peer` / `_name_of` fall back to the occupant with no session, because `--offline` has none.
+- `_send_chat` adds the occupant id as the wire's one meta field, for the bubble.
+- `_peer_can_receive` answers no, so the base does not send the backlog at seating, which is before the client can receive. The module welcomes on `RoomBridge.peer_admitted` instead.
+- `_can_tick` answers no while there is no live world: a game change frees the scene before the module hears about it. Defensive — arming it (removing the guard) failed nothing in `dedicated`, and it stays because the old module had it and a use-after-free is not something to discover in production. It was a `_physics_process` override until the base grew the question.
+- `_game_load` refuses to load without the services layer, where the base only logs: a lobby with no chat is an empty room.
+- The roster's `add_fn` seats an occupant only when a room is live; its `remove_fn` takes the peer off the broadcast set, announces the leave and clears their props before the room forgets them. The module follows its own roster after the services, so voice hears about somebody before anything is sent to them.
+
+**The reverse teardown is visible in the log.** `dedicated` unloads the module and loads it again, and with the old one five services were registered over a previous instance that had not yet left the tree — `dot_ban_source`, `dot_chat_router`, `dot_mute_source`, `dot_net_manager`, `dot_voice_router`, each a "registry replacing service registration" warning. `DotGameModule._teardown` removes each layer from the tree as it drops it, so the new instance registers into an empty name and all five warnings are gone.
+
+**Two bugs the move found, and a check for each that fails on the old code:**
+
+- **Offline, the chat router looked for its mute source under a name nothing registers.** `RoomServices` scoped the router's `mute_service` whenever it was itself scoped, which `--offline` always is (`dot_mute_source:offline`), and dot-moderation's manager has no scope and registers plain `dot_mute_source`. So an offline gag was recorded and never enforced, silently: an empty registry name is a legitimate state and nothing warns about it. That is the symptom dot-game's notes give for building the router before moderation — "enforces no gag for the life of the server" — reached by a name rather than an order, and `DotGameServices` looks the name up unscoped. `headless_net`'s **a gag, offline** was armed by putting the scoped lookup back: two checks fail, "'dot_mute_source:offline' resolves to <null>" and "the line was ACCEPTED".
+- **Over a real socket, nobody was ever welcomed.** Not one of the bugs in dot-game's notes, and the one behaviour change here outside them. `_welcome` — the backlog, the "joined" line, everybody's avatar — ran from the spawn handler and returned if the peer was not yet ready, and over a real connection it never is: the client builds its scene after signon and only then asks for the room. A probe in `sandbox` showed both clients unready at spawn, and the second had three lines of backlog it never received. It showed up because the base's `add_peer` sends the backlog at seating, and taking that away to keep the old behaviour made the newcomer's count zero where the base's made it one. The welcome now follows `RoomBridge.peer_admitted`, once per seating; `sandbox`'s **a second person** counts the backlog line at exactly one, and read 0 on the old path.
+
+**What the base had no hook for, and now has** (dot-game, 2026-09-25). Each was worked round here first, and each workaround is gone:
+
+- `DotGameServices.setup` refused a null server and was the only thing in it that needed one, so `RoomServices._setup_offline` was the base's whole sequence minus that guard. The base takes a null server now and skips only what is bound to one; `RoomServices.setup` switches `mod_tools_enabled` off for `--offline` (no console, and an offline lobby never had the tools) and calls `super`.
+- Neither router was given a `can_hear_fn`, so both were set after `super.setup`. The base wires its own `_can_hear(listener, speaker, listener_at, speaker_at)` into both, and `RoomServices._can_hear` — the same function it always was — is now an override. `sandbox`'s **out of earshot through the partition** is the check: it fails three checks without the base's wiring.
+- No hook to configure the tools before binding, so `_build_mod_tools` called `super` and then set `goto_standoff` (48 pixels, not 1.5 metres) and `persist_on_respawn` (blind and beacon survive a game change). That is `_mod_configure_tools(tools)` now; `dedicated`'s 48-pixel stand-off is the check.
+- `DotGameServices.add_peer` always sent the backlog at once, so it was overridden to voice only; it is `_peer_can_receive` now (above), with `send_backlog(peer)` for a game that would rather the base sent it later. `DotGameModule._physics_process` had no "may I tick" question, so it was overridden; it is `_can_tick` now (above).
+
 ## The moderator's live tools, in a room where nobody can be hurt
 
 dot-moderation's live tools are on this server's console and in chat, and **what a lobby needs a moderator for is moving people and renaming them**: bring, goto, send, return and rename work, with a stand-off in pixels (48) rather than the addon's metre and a half, which would put one avatar on top of the other. `dedicated` sends one occupant to another, returns them exactly, renames one and has a slay refused.
@@ -35,7 +73,7 @@ dot-moderation's live tools are on this server's console and in chat, and **what
 
 `RoomUi.blind_overlay` is a near-black rect that fades in over a quarter of a second, sized to the viewport, and is the interface's **first** child — so the chat log, the entry and the roster still draw over it and still take the mouse. In a lobby those are how a moderator tells somebody why, and a blind that took the chat as well would be a gag nobody typed. `RoomRenderer` draws the beacon as a saturated red-orange ring outside the local player's own white one, with a ripple out to three and a half times it once a second, under everybody so it never covers a face; there is no column through walls, because nobody in a room smaller than the screen can stand behind one. The renderer keeps each ripple's phase and emits `beacon_pulsed` as each starts, which the client plays as `RoomPresentation.BEACON_SOUND` — a positional BLIP an octave under `chat_message`, reaching past the room's diagonal. The ripple and the ping come from the same phase, so on screen they cannot drift apart.
 
-**A lobby has no respawn, so a game change stands in for one.** `RoomBridge.rebind` re-adds every occupant from scratch, and nothing told the tools: a noclip or a freeze was gone with the old room while `modtools <player>` still listed it. `RoomModule._carry_mod_tools` calls `DotModTools.respawned` for everybody after a rebind, so blind and beacon (`PERSIST_ACROSS_CHANGE`) are put back on the new occupant and everything else is switched off and forgotten. And it then calls `DotModTools.clear_history()`, because `respawned` keeps the return history on purpose — in a game that respawns a body in the same map a return still means something — and after a change every position in it is a point in the room that was freed: `return <player>` put them where they had stood in a different map. `dedicated`'s **a game change** section asserts all three and fails without either call; the history check was armed by removing the clear, and reported her returned to (392, 0) in the previous room.
+**A lobby has no respawn, so a game change stands in for one.** `RoomBridge.rebind` re-adds every occupant from scratch, and nothing told the tools: a noclip or a freeze was gone with the old room while `modtools <player>` still listed it. `RoomModule._carry_mod_tools` calls `DotModTools.respawned` for everybody after a rebind, so blind and beacon (`RoomServices.PERSIST_ACROSS_CHANGE`) are put back on the new occupant and everything else is switched off and forgotten. And it then calls `DotModTools.clear_history()`, because `respawned` keeps the return history on purpose — in a game that respawns a body in the same map a return still means something — and after a change every position in it is a point in the room that was freed: `return <player>` put them where they had stood in a different map. `dedicated`'s **a game change** section asserts all three and fails without either call; the history check was armed by removing the clear, and reported her returned to (392, 0) in the previous room.
 
 `dedicated` drives both through the console, including `blind Cy 0.2` lifting itself; `headless_net` asserts the audience over the lossy loopback (the client learns its own blind and not the other occupant's, and learns both beacons); `sandbox` asks the same question of two real clients and ends at the blinded client's own overlay; `headless_presentation` asserts once-a-second pings, the ring going with the flag or the person, and the overlay covering the viewport. Each was armed: dropping `to_owner_only()` failed two in `headless_net` and one in `sandbox`, a ping every frame and a blind left unsized failed three in `headless_presentation`, and removing `_carry_mod_tools()` failed two in `dedicated`. `tools/screenshot.sh --admin` renders both.
 
@@ -479,9 +517,9 @@ tools/check.sh                # every suite ci.yml names, after a parse pass
 | `headless_room` | 84 | the room alone. Membership, walls, every level walked by a held direction, a flood over the whole floor for sealed pockets, and two worlds replaying the same commands bit-identically |
 | `headless_stack` | 24 | the player layer: the collision layout, the two sides, the class as a choice nothing applies, and the ring of seats — filled past eight, because two arrivals cannot tell a seat chooser from a coin |
 | `headless_presentation` | 88 | settings, audio, effects, the console and the party — **none of which `headless_room` can reach**, because that one is `RoomWorld` alone and has no client in it |
-| `headless_net` | 84 | every encoder against its decoder, then a session over a lossy delaying loopback, then a walk into the furniture |
+| `headless_net` | 88 | every encoder against its decoder, then a session over a lossy delaying loopback, then a walk into the furniture, and a gag that reaches the offline chat |
 | `dedicated` | 143 | a real `DotServer`, a real module, a real WebSocket listener, and the props, chat, voice, moderation and identity halves — and a game change under the loaded module, to another room, to a game that is not one, and back |
-| `sandbox` | 81 | **a real server and two real clients, over real sockets, in one process** — chat, props and voice all cross a wire here and nowhere else |
+| `sandbox` | 82 | **a real server and two real clients, over real sockets, in one process** — chat, props and voice all cross a wire here and nowhere else, and a newcomer is welcomed exactly once |
 
 **The list of suites lives in `.github/workflows/ci.yml` and nowhere else.** `tools/check.sh` reads its `suites:` line and fails if `release.yml`'s differs. Before that, check.sh carried its own list, which had lost `headless_stack`, and CI auto-detected `examples/headless_*` — so neither `dedicated` nor `sandbox`, the two that run a real server, ever ran in CI.
 
@@ -525,10 +563,10 @@ the total at the bottom cannot reveal a check that never ran.
 | Where friends meet when there is no server | `RoomParty.signalling_url` |
 | Where a chat line may be said and who hears it | `RoomServices.chat_channels()` — four channels, one of them a radius |
 | What a chat line may contain | `RoomServices.chat_rules()` |
-| Where punishments live | `RoomServices.punishments_path`, or a `DotPunishmentStore` subclass |
-| Who counts as an admin, and what a speaker's key is | `RoomServices._is_admin` / `_key_of` / `_subject_for_peer` |
+| Where punishments live | `RoomModule.punishments_path` (a server) or `RoomOffline.punishments_file` (offline), or a `DotPunishmentStore` subclass |
+| Who counts as an admin, and what a speaker's key is | `DotGameServices._is_admin`; `RoomServices._key_of` / `_subject_for_peer` |
 | The voice format both ends must agree on | `RoomServices.voice_config()` |
-| Whether voice is proximity or the whole room | `RoomServices._build_voice`, one line |
+| Whether voice is proximity or the whole room | `RoomServices._voice_default_channel`, one line |
 | What stops a voice or a near line | `RoomContent.walls()`; the rule is `RoomContent.within_earshot`, asked by both routers through `RoomServices._can_hear` |
 | What somebody may wear | `RoomContent.avatar_schema()` |
 | Where profiles and avatars are stored, and the pseudonym scope | `RoomPlatform` |
@@ -670,7 +708,7 @@ What it takes from the family instead is the key. `RoomUi.OPEN_CHAT_ACTION` is a
 
 **There is deliberately no `chat_window` setting here, and this is the only game where that is right.** Everywhere else the box is drawn over a game and "I chat somewhere else" is a sensible thing for a player to say. Here, turning it off leaves a person standing in an empty room with no way to say so. `headless_presentation` asserts the setting's *absence*, so nobody adds it later for symmetry.
 
-The server still tells its clients what is carrying chat — `RoomServices` points `DotChatManager.watch_relay` at the relay it builds — because every other game uses that answer and the lobby is where the site's relay is most likely to be on. Nothing here hides anything for it.
+The server still tells its clients what is carrying chat — `DotGameServices` points `DotChatManager.watch_relay` at the relay it builds — because every other game uses that answer and the lobby is where the site's relay is most likely to be on. Nothing here hides anything for it.
 
 ## No message preloads itself
 

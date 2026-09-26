@@ -4,6 +4,7 @@ const RoomContent := preload("../game/room_content.gd")
 const RoomLink := preload("../game/room_link.gd")
 const RoomModule := preload("../game/room_module.gd")
 const RoomPlatform := preload("../game/room_platform.gd")
+const RoomOccupantNet := preload("../game/room_occupant_net.gd")
 const RoomProps := preload("../game/room_props.gd")
 const RoomServices := preload("../game/room_services.gd")
 const RoomWorld := preload("../game/room_world.gd")
@@ -452,7 +453,7 @@ func _test_live_tools() -> void:
 		session.userid = int(entry[1])
 		session.display_name = str(entry[2])
 		var _adopted := _server.adopt_session(session)
-		var _in := module.bridge.add_occupant(session.peer_id, session.userid, session.display_name)
+		var _in: DotResult = module.bridge.add_occupant(session.peer_id, session.userid, session.display_name)
 		sessions.append(session)
 
 	var bea := _world().occupant_for(5252)
@@ -500,7 +501,7 @@ func _test_live_tools() -> void:
 	_check(cy.blinded, "`blind Cy` blacks her screen out", " | ".join(dark))
 	await get_tree().physics_frame
 	await get_tree().physics_frame
-	var cy_net := module.bridge.behaviour_for(5353)
+	var cy_net: RoomOccupantNet = module.bridge.behaviour_for(5353)
 	_check(cy_net != null and cy_net.net_blind, "and it is on the entity the netcode sends her")
 	var _lift := await _live("blind Cy off")
 	_check(not cy.blinded, "`blind Cy off` lifts it")
@@ -554,7 +555,7 @@ func _test_joining() -> void:
 	_section("membership")
 
 	var module := _module()
-	var added := module.bridge.add_occupant(9, 4242, "Ada")
+	var added: DotResult = module.bridge.add_occupant(9, 4242, "Ada")
 
 	_check(added.ok, "the bridge puts somebody in the room", str(added.error))
 	_check(_world().occupant_count() == 1, "and the room has one person in it")
@@ -575,7 +576,7 @@ func _test_joining() -> void:
 			% module.bridge.peer_for_occupant(4242)
 	)
 
-	var behaviour := module.bridge.behaviour_for(4242)
+	var behaviour: RoomOccupantNet = module.bridge.behaviour_for(4242)
 	_check(
 		behaviour != null and behaviour.identity != null
 			and behaviour.identity.owner_peer_id == 9,
@@ -593,7 +594,7 @@ func _test_joining() -> void:
 	# `submit` applies every rule, `message_accepted` fires, and the module puts the text
 	# over the speaker's head. dot-server's own `player_chat` is cancelled by this module,
 	# so firing that event is now a check that it is cancelled rather than a way in.
-	var said := module.services.chat.submit(9, RoomServices.CHANNEL_ALL, "hello")
+	var said: DotResult = module.services.chat.submit(9, RoomServices.CHANNEL_ALL, "hello")
 	_check(said.ok, "a line is accepted by the chat router", str(said.error))
 	_check(
 		occupant != null and occupant.bubble_text == "hello",
@@ -935,7 +936,7 @@ func _test_game_change() -> void:
 	again.game_id = "simple_lobby_again"
 	_server.games.add_game(again)
 
-	var added := module.bridge.add_occupant(31, 5151, "Grace")
+	var added: DotResult = module.bridge.add_occupant(31, 5151, "Grace")
 	_check(added.ok, "somebody is in the room before it changes", str(added.error))
 
 	module.props.spawner.limits.spawn_interval = 0.0

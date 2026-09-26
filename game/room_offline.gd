@@ -34,6 +34,10 @@ const CLIENT_PEER := 2
 ## from a real session.
 const CLIENT_OCCUPANT := 500001
 
+## Where an offline run keeps punishments. Static so a suite can point it at a directory
+## of its own before [method start], as `RoomModule.punishments_path` does for a server.
+static var punishments_file: String = "user://room_punishments_offline.json"
+
 var server_world: RoomWorld = null
 var server_net: DotNetManager = null
 var server_bridge: RoomBridge = null
@@ -167,16 +171,15 @@ func _build_services() -> DotResult:
 	services.name = "Services"
 	services.bridge = server_bridge
 	services.world = server_world
-	# No DotServer offline. [RoomServices] is built for that: names come out of the room
-	# and keys are derived from the occupant id.
-	services.server = null
 	services.service_scope = &"offline"
 	# A punishment file an offline run wrote would be a punishment a real server then
 	# loaded, against a key that means nothing to it. Its own path, deliberately.
-	services.punishments_path = "user://room_punishments_offline.json"
+	services.punishments_file = punishments_file
 	add_child(services)
 
-	var ready := services.setup()
+	# No DotServer offline. [RoomServices] is built for that: names come out of the room
+	# and keys are derived from the occupant id.
+	var ready := services.setup(null, server_world, server_bridge.link)
 
 	if not ready.ok:
 		return ready
@@ -225,7 +228,7 @@ func _on_undo_requested(peer_id: int) -> void:
 
 
 func _on_say_requested(peer_id: int, channel_id: StringName, text: String) -> void:
-	var said := services.chat.submit(peer_id, channel_id, text)
+	var said: DotResult = services.chat.submit(peer_id, channel_id, text)
 
 	if not said.ok and said.error != null:
 		DotLog.debug(CHANNEL, "chat line refused", {

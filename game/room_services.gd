@@ -1,42 +1,33 @@
-extends Node
+extends DotGameServices
 
 const RoomBridge := preload("room_bridge.gd")
 const RoomWorld := preload("room_world.gd")
 const RoomContent := preload("room_content.gd")
+const RoomOccupant := preload("room_occupant.gd")
 
-## Chat, moderation and voice, wired to this room's people and this room's wire.
+## Chat, moderation, voice and the live tools, wired to this room's people and this room's
+## wire.
 ##
-## [b]Three addons that all answer the same question and must answer it the same way.[/b]
-## [DotChatRouter] decides whether somebody may type, [DotVoiceRouter] decides whether
-## they may talk, and [DotModerationManager] is what makes either answer survive a
-## reconnect. They are here together because the joins between them are the whole point:
-## the router does not import the moderation addon and the moderation addon does not
-## import the router — they meet through two registry names, `dot_mute_source` and
-## `dot_ban_source`, and this file is what makes sure something is registered under them.
+## [b]The sequence is [DotGameServices]'s[/b] — moderation first because it publishes
+## `dot_mute_source` and both routers look that name up when they start, then the live
+## tools, chat, the website relay, voice — and so are the relay, the admission check, the
+## punishment subject's shape and the unbinding of the tool commands. What is left here is
+## what is actually this lobby's: four channels, one of them a radius; a line longer and
+## chattier than a shooter's; voice for the whole room; walls that stop a near line; a chat
+## key that is the occupant rather than the account; and a live-tool set for a room where
+## nobody can be hurt.
 ##
 ## [b]What this is not: a second chat system.[/b] dot-server ships [DotChatManager], which
-## sanitises, rate-limits and broadcasts one channel. That is what this game used, and it
-## is exactly right for a server with no game. A lobby is a game whose entire content is
-## the conversation, so it wants what that one does not have: a channel you can be near
-## rather than in, a backlog for whoever just walked in, a `/me`, and a gag that is still
-## there tomorrow. So the rules moved, and dot-server's broadcast is [b]cancelled[/b] in
-## [method RoomModule._on_player_chat] rather than left running beside this. There is one
-## path. Two would be two sets of rules, and the one that skipped the filter would be the
-## one that leaked admin chat.
+## sanitises, rate-limits and broadcasts one channel. A lobby is a game whose entire content
+## is the conversation, so it wants what that one does not have, and dot-server's broadcast
+## is [b]cancelled[/b] in `RoomModule._on_player_chat` rather than left running beside this.
+## There is one path. Two would be two sets of rules, and the one that skipped the filter
+## would be the one that leaked admin chat.
 ##
-## [b]Everything the router needs to know about a person is a callable[/b], because the
-## router has never heard of dot-server and should not: the peers, the names, the keys,
-## the positions and who is an admin are all this file's answers to dot-chat's questions.
-
-const CHANNEL := "room.services"
-
-## Where the chat relay reads its own settings from, when the host assigned none.
-##
-## `user://` rather than `res://`: it is an operator's file on a running server, and an
-## exported build cannot be written to. Absent is the normal case and costs nothing -- the
-## file layer is skipped and the environment and command line still apply, which is how a
-## container turns the relay on without a file at all.
-const RELAY_CONFIG_PATH := "user://chat_relay.json"
+## [b]It also runs with no server at all.[/b] `--offline` runs the real chat router, the
+## real moderation manager and the real voice router with no [DotServer], through the
+## base's own sequence — [DotGameServices] takes a null server since 2026-09-25, and this
+## file's copy of that sequence went with it. See [method setup].
 
 ## Channel ids. Constants because they are on the wire — a client sends the id of the
 ## channel it had selected, and a typo would be a line that vanished.
@@ -53,7 +44,9 @@ const CHANNEL_WHISPER := &"whisper"
 ## room you can see all of.
 const NEAR_RANGE := 420.0
 
-## Where punishments are written.
+## Where punishments are written by default: [method _services_name] is `room`, so
+## [DotGameServices] arrives at exactly this path. Kept as a constant because a host that
+## redirects it (`RoomModule.punishments_path`) needs something to redirect FROM.
 ##
 ## A file, because this is a lobby and a lobby is what one person runs on a box. The store
 ## is a [DotPunishmentStore] subclass, so a community pointing it at a shared database is
@@ -62,237 +55,100 @@ const NEAR_RANGE := 420.0
 ## is banned from all of it.
 const PUNISHMENTS_PATH := "user://room_punishments.json"
 
-
-## Somebody typed something that started with `!` or `/` and no command claimed it.
-signal command_entered(peer_id: int, command: String, args: PackedStringArray)
-
-
-var chat: DotChatRouter = null
-var moderation: DotModerationManager = null
-## The website chat relay, when one is configured. See [method _build_relay].
-var relay: DotChatRelay = null
-
-## The relay's configuration. Left null, a default is built and the relay stays OFF.
+## Toggles that survive a game change here, beyond dot-moderation's own god and buddha
+## (which a lobby refuses anyway).
 ##
-## Off by default for the same reason every other power in this family is: a relay
-## carries what your players type to a web page and back, and that is an operator's
-## decision rather than a consequence of installing an addon.
-@export var relay_config: DotChatRelayConfig = null
+## [b]Blind and beacon are about the person, not the room they are standing in.[/b] A
+## moderator who blinded somebody or wanted the room to watch them has not changed their
+## mind because the map did — and a change is exactly what somebody being dealt with would
+## otherwise wait for to end it.
+const PERSIST_ACROSS_CHANGE: Array[String] = ["blind", "beacon"]
 
-## The backbone client the relay posts through, assigned by the host BEFORE setup.
-##
-## [b]An [Object], not a [DotBackboneClient].[/b] The relay holds it duck-typed so that
-## dot-chat need not depend on dot-auth, and keeping one spelling across the seam means
-## the duck-typed contract is the only contract.
-var backbone: Object = null
+## Pixels, not metres: a lobby's avatar is about forty across, and dot-moderation's 1.5
+## would land one person on top of the other.
+const GOTO_STANDOFF := 48.0
 
-var voice: DotVoiceRouter = null
 
-## Where a chat line and a voice frame leave through. Set by [RoomModule].
+## Where a chat line and a voice frame leave through. Set by `RoomModule` before setup.
 var bridge: RoomBridge = null
 
-## The room, for the proximity channel and the proximity voice channel.
+## The room, for the proximity channel, the walls and the live tools. The same object as
+## [member DotGameServices.game], typed; `RoomModule` moves both on a game change.
 var world: RoomWorld = null
 
-## The server, for names, keys and permissions.
+## Where punishments actually go, whoever chose it. Read-only; set
+## [member DotGameServices.punishments_file] to move it.
+var punishments_path: String:
+	get:
+		return _punishments_path()
+
+
+# --- The sequence ----------------------------------------------------------
+
+## Builds the four layers, in [DotGameServices]'s order.
 ##
-## [b]Optional, and that is what lets `--offline` run the real chat router.[/b] With no
-## server there are no sessions, so a name comes from the room and a key is derived from
-## the occupant id — which is exactly as durable as an offline session is. The alternative
-## is an offline lobby whose chat is a different code path from an online one, and this
-## family's own repeated lesson is that a path only one deployment shape reaches is a path
-## nothing has run.
-var server: DotServer = null
-
-## Suffix for every registry name this node publishes.
+## [b]A null [param p_server] is `--offline`[/b], and the base takes it: every seam past its
+## old server guard already answered "no server" sensibly. **No live tools offline** —
+## they are commands on a server's console and there is no console, and an offline lobby
+## never had them — so [member DotGameServices.mod_tools_enabled] is switched off first.
 ##
-## [b]Not cosmetic.[/b] `examples/sandbox.tscn` runs a server and two clients in one
-## process, and three routers registered under one name means two of them are invisible
-## and dot-chat's gag lookup finds whichever registered last.
-var service_scope: StringName = &""
-
-## Where punishments are written. Overridable so a test does not write to a real one.
-var punishments_path: String = PUNISHMENTS_PATH
-
-## Whether the store had answered by the time [method setup] returned.
-##
-## True for a file store, which is every deployment of this game. Reported by
-## `room_services`, because a server enforcing nothing and a server with nothing to
-## enforce look identical from outside.
-var punishments_loaded: bool = false
-
-
-## Builds all three.
-##
-## [b]Deliberately not a coroutine, and that is a constraint from dot-server rather than a
-## preference.[/b] [method DotModuleHost.load_module] calls `_module_load()` with a bare
-## call and reads `result.ok` on the next line — so a module whose load suspends returns
-## null there and the host crashes on a module that was working. Every call in here is
-## therefore synchronous, and the one thing that genuinely could suspend — reading the
-## punishment store — is handled in [method _build_moderation] with the reason written
-## beside it.
-func setup() -> DotResult:
+## Deliberately not a coroutine: `RoomOffline` calls it bare, and so does nothing else that
+## would notice — [DotGameModule] awaits it, which costs nothing on a function that never
+## suspends.
+func setup(p_server: DotServer, p_game: Object, p_link: Object) -> DotResult:
 	if bridge == null or world == null:
 		return DotResult.fail(
 			DotError.CODE_STATE, "The room's services need a bridge and a world."
 		)
 
-	# [b]Moderation first, and the order is load bearing.[/b] It is what registers
-	# `dot_mute_source`, and [method DotChatRouter.start] warns once — and then never
-	# again — when there is nothing under that name. Starting the router first would
-	# produce a server that logs "no gag source" on boot and then gags nobody, with the
-	# warning scrolled off by the time anybody tried.
-	var punished := _build_moderation()
+	if p_server == null:
+		mod_tools_enabled = false
 
-	if not punished.ok:
-		return punished
+	var ready: DotResult = super.setup(p_server, p_game, p_link)
 
-	var talking := _build_chat()
+	if not ready.ok:
+		return ready
 
-	if not talking.ok:
-		return talking
-
-	# After chat, because it needs the router; not fatal, because a relay that cannot
-	# start is a server that still runs a perfectly good match.
-	var relayed := _build_relay()
-	DotLog.result(CHANNEL, "the website chat relay", relayed)
-
-	return _build_voice()
-
-
-func _exit_tree() -> void:
-	# Nothing is unregistered by hand: every one of the three unregisters itself in its
-	# own `_exit_tree`, and doing it twice is how a scope that is still in use gets
-	# cleared out from under the other copy.
-	pass
-
-
-# --- Moderation ------------------------------------------------------------
-
-func _build_moderation() -> DotResult:
-	moderation = DotModerationManager.new()
-	moderation.name = "Moderation"
-	moderation.store = DotPunishmentStoreFile.new(punishments_path)
-
-	# [b]No scope, and that is the case worth getting right.[/b] dot-moderation shipped a
-	# bug where a server with no scope saw no scoped punishments — so the unconfigured
-	# case, which is the only case a single-server lobby is ever in, was the one that
-	# silently enforced nothing. Left empty here deliberately, so this game runs the
-	# configuration that used to be broken.
-	moderation.server_scope = ""
-	moderation.register_mute_source = true
-	moderation.register_ban_source = true
-
-	# Zero means "no immunity to respect", not "the highest rank there is". A lobby that
-	# has not configured immunity at all is every ordinary unmute, and requiring strictly
-	# greater immunity unconditionally made 0 unable to act on 0 — dot-moderation's own
-	# bug, and the reason this is set rather than left.
-	moderation.equal_immunity_may_act = true
-
-	# How a peer becomes a person. [b]The account uid when there is one, and the session's
-	# own uid otherwise[/b] — never the peer id, which is reassigned on reconnect, and
-	# never the address, which is what a household shares.
-	moderation.key_for_peer = _subject_for_peer
-
-	add_child(moderation)
-
-	# [b]A bare statement call, and this is the one place in this file that needs
-	# explaining.[/b] [method DotModerationManager.load_all] is a coroutine because a
-	# store MAY be an HTTP one; [DotPunishmentStoreFile] is not, so the call runs to
-	# completion without ever suspending and the records are in force by the next line.
-	# It cannot be awaited here, because this is reached from `_module_load` and
-	# dot-server's module host does not await that — see [method setup].
-	#
-	# A deployment that swaps in [DotPunishmentStoreRest] genuinely does suspend, and the
-	# check below is what says so out loud rather than leaving a server that quietly
-	# enforces nothing for the first second of its life. That is the honest half: the fix
-	# is a `PROFILE`-shaped load stage in dot-server, which is the same gap dot-platform's
-	# module documents.
-	moderation.load_all()
-
-	if not moderation.store.is_writable():
+	if moderation != null and not (moderation as DotModerationManager).store.is_writable():
 		DotLog.warn(CHANNEL, "the punishment store cannot be written to", {
 			"path": punishments_path,
 		})
 
-	punishments_loaded = true
-
-	return DotResult.success(null)
+	return ready
 
 
-## Who a peer is, for a punishment.
-##
-## [b]The durable account uid, and NOT the same answer [method _key_of] gives dot-chat.[/b]
-## The two addons ask two different questions through two different seams and this is the
-## whole reason both seams exist:
-##
-## - a punishment is against a **person who will come back**, so it is keyed by something
-##   that survives a reconnect — otherwise a gag lasts until the gagged player presses
-##   reconnect, which is the first thing anybody who has been gagged tries, and is exactly
-##   the bug dot-moderation was written to fix in dot-server's two-booleans-on-a-session;
-## - a chat line is attributed to **somebody standing in this room right now**, which is
-##   an occupant.
-##
-## They are not interchangeable and the difference is measurable: two guests connecting
-## from one machine share a device id and therefore share a uid, so keying a chat line by
-## it puts the second person's words over the first person's head. That is not
-## hypothetical — `examples/sandbox.tscn` runs two clients in one process and found it.
-func _subject_for_peer(peer_id: int) -> String:
-	var session := _session_for(peer_id)
-
-	if session == null:
-		# No server: an offline run, where a session id is the most durable thing there
-		# is. Prefixed so it can never be mistaken for a real uid in a stored punishment.
-		var occupant := bridge.occupant_for_peer(peer_id) if bridge != null else null
-		return DotPunishmentSubject.for_uid("offline:%d" % occupant.id) \
-			if occupant != null else ""
-
-	return DotPunishmentSubject.for_uid(session.uid())
+func _services_name() -> String:
+	return "room"
 
 
-# --- Chat ------------------------------------------------------------------
+# --- What this lobby says and how --------------------------------------------
 
-func _build_chat() -> DotResult:
-	chat = DotChatRouter.new()
-	chat.name = "Chat"
-	chat.rules = chat_rules()
-	chat.rules_file = ""
-	# The defaults are a shooter's — everyone, team, whisper — and this room has no teams.
-	# Building them here means the set is exactly the four below and a fifth cannot arrive
-	# from a version bump nobody noticed.
-	chat.install_default_channels = false
-	chat.handle_me_command = true
-	chat.register_as = _scoped(DotChatRouter.SERVICE)
-	chat.mute_service = _scoped(DotModerationManager.MUTE_SERVICE) \
-		if service_scope != &"" else DotModerationManager.MUTE_SERVICE
+func _chat_channels() -> Array:
+	return chat_channels()
 
-	chat.send_fn = _send_chat
-	chat.peers_fn = _chat_peers
-	chat.name_fn = _name_of
-	chat.key_fn = _key_of
-	chat.position_fn = _position_of
-	chat.can_hear_fn = _can_hear
-	chat.is_admin_fn = _is_admin
 
-	add_child(chat)
+func _chat_rules() -> Object:
+	return chat_rules()
 
-	var started := chat.start()
 
-	if not started.ok:
-		return started.wrap("The chat router could not start")
+func _voice_config() -> Object:
+	return voice_config()
 
-	for channel in chat_channels():
-		var added := chat.add_channel(channel)
 
-		if not added.ok:
-			return added.wrap("A chat channel was refused")
-
-	chat.command_entered.connect(_on_command_entered)
-
-	return DotResult.success(null)
+## [b]Everybody, not proximity, and this is the one place the two chat channels and the
+## voice channel deliberately disagree.[/b] Text has a near channel because you can read two
+## conversations at once and choose; voice you cannot, and a lobby where you walk out of
+## earshot mid-sentence is a lobby where nobody uses voice. The proximity machinery is wired
+## and reachable — `position_fn` and `can_hear_fn` are both set — so a deployment that wants
+## it changes this one line.
+func _voice_default_channel() -> int:
+	return DotVoiceRouter.Channel.ALL
 
 
 ## The four channels this room has.
+##
+## [b]Static, and read by the client as well[/b] — the channel palette and the client's own
+## router are built from this, so the two ends cannot disagree about what exists.
 ##
 ## [b]"Near" is the one that is not decoration.[/b] A lobby with one channel is a lobby
 ## where thirty people are in one conversation and nobody can have another; a lobby where
@@ -374,190 +230,6 @@ static func chat_rules() -> DotChatRules:
 	return rules
 
 
-func _on_command_entered(
-	peer: int, command: String, args: PackedStringArray, _raw: String
-) -> void:
-	command_entered.emit(peer, command, args)
-
-
-## Where a routed line goes. dot-chat has already decided exactly who gets it.
-func _send_chat(wire: Dictionary, recipients: PackedInt32Array) -> void:
-	if bridge == null:
-		return
-
-	# Who said it, as an occupant id, so a client can put a bubble over the right head.
-	#
-	# [b]It is already in the wire: the key IS the occupant.[/b] See [method _key_of] for
-	# why that is the right key rather than the account uid. This lifts it into the one
-	# meta field this game's wire carries, so a client can use it without having to parse
-	# a field it is meant to treat as opaque.
-	var addressed := wire.duplicate()
-	var occupant_id := _occupant_for_key(str(wire.get("s", "")))
-
-	if occupant_id > 0:
-		addressed["x"] = {"o": occupant_id}
-
-	for peer_id in recipients:
-		# Peer by peer, never a broadcast. The router's whole job on a whisper is to
-		# produce a list of two, and handing that to a broadcast would undo it.
-		bridge.send_chat(int(peer_id), addressed)
-
-
-func _occupant_for_key(key: String) -> int:
-	return key.to_int() if key.is_valid_int() else 0
-
-
-
-# --- The website relay -----------------------------------------------------
-
-## Joins this server's chat to its room on the website.
-##
-## [b]Every seam points at something that already existed.[/b] The backbone client is
-## dot-auth's. The permission answer is dot-server's admin manager, through
-## `uid_has_permission` — the method written for exactly this, deciding what somebody may
-## do when they are not connected. The command runner is `DotServer.run_command_as_uid`,
-## which builds a context with that uid's OWN flags rather than RCON's root.
-##
-## Nothing here is a new policy. A relayed command is checked against the same file, by
-## the same flags, as the same person typing it in game.
-func _build_relay() -> DotResult:
-	if relay_config == null:
-		relay_config = DotChatRelayConfig.new()
-
-		# LAYERED, and it was not. A `DotConfig` is exported defaults, then a JSON file,
-		# then the environment, then the command line -- and a config that is merely `new()`d
-		# has only the first of those, so `DOT_CHAT_RELAY_ENABLED=1` and
-		# `--chat-relay-enabled` both did nothing. The relay could be turned on only by a
-		# host that assigned a config object, and no host in this family assigns one: the
-		# whole addon was unreachable from every documented route, in all five games, with
-		# nothing erroring, because a disabled relay is a legitimate configuration.
-		#
-		# Only on the config this builds. A config the host handed over is the host's, and
-		# re-layering it here would overwrite a deliberate choice with an environment
-		# variable somebody set for a different server.
-		var layered := relay_config.load_layered(RELAY_CONFIG_PATH)
-		if not layered.ok:
-			DotLog.warn(CHANNEL, "the chat relay configuration is not usable", {
-				"why": str(layered.error),
-			})
-			return DotResult.success(null)
-
-	if not relay_config.enabled:
-		return DotResult.success(null)
-
-	if backbone == null:
-		# **Found, not handed over.** A backbone client is built by whatever owns the
-		# server's credential — dot-server-deploy's `TmcReport`, or this game's own
-		# identity layer — and a relay built during module load exists before any host
-		# could assign one. `DotBackboneClient` publishes itself under this name for
-		# exactly that reason; the ordering trap is the one that left dot-server's audit
-		# log unopened in every default configuration.
-		backbone = DotRegistry.get_service(&"dot_backbone_client")
-
-	if backbone == null:
-		# Info and success, not a failure, and the difference matters now that the relay
-		# can be turned on by an environment variable. A deployment that exports
-		# `DOT_CHAT_RELAY_ENABLED=1` for a whole fleet and holds a credential for only some
-		# of them is the ordinary case -- and a red line on every boot of the others is this
-		# family's own "a warning that reads like a setting nobody filled in", which is how
-		# a real one stops being read. The line names what to do, which is the only part an
-		# operator can act on.
-		DotLog.info(
-			CHANNEL,
-			"the chat relay is on but there is no backbone client, so it will not start",
-			{"fix": "put a server-scoped integration token in the listing configuration"}
-		)
-		return DotResult.success(null)
-
-	relay = DotChatRelay.new()
-	relay.name = "ChatRelay"
-	relay.router = chat
-	relay.config = relay_config
-	relay.client = backbone
-	relay.permission_fn = _uid_has_permission
-	relay.command_fn = _run_relayed_command
-	relay.commands_fn = _relay_command_document
-
-	add_child(relay)
-
-	var started := relay.start()
-
-	if not started.ok:
-		remove_child(relay)
-		relay.queue_free()
-		relay = null
-		return started
-
-	relay.site_command.connect(_on_site_command)
-
-	# [b]Tell the clients.[/b] Nothing here hides the chat box for it — in a lobby the chat
-	# IS the game — but a client that knows the room is also on the website can say so, and
-	# every other game in this family uses the same answer to decide whether to draw a box.
-	if server != null and server.chat != null:
-		server.chat.watch_relay(relay)
-
-	return DotResult.success(relay)
-
-
-func _uid_has_permission(uid: String, flag: String) -> bool:
-	if server == null or server.admins == null:
-		return false
-	return server.admins.uid_has_permission(uid, flag)
-
-
-func _run_relayed_command(
-	uid: String, command: String, args: PackedStringArray, source: int
-) -> void:
-	if server == null:
-		return
-
-	for reply in server.run_command_as_uid(uid, command, args, source):
-		DotLog.info(CHANNEL, "relayed command reply", {"uid": uid, "line": reply})
-
-
-func _on_site_command(uid: String, command: String, allowed: bool) -> void:
-	# Audited either way. A refusal is the half worth having a record of: it is somebody
-	# trying to drive the server from a web page without the rights to.
-	if server != null and server.audit != null:
-		server.audit.record(
-			"relay_command", "web:%s" % uid, command, {"allowed": allowed}
-		)
-
-
-# --- Voice -----------------------------------------------------------------
-
-func _build_voice() -> DotResult:
-	var config := voice_config()
-	var problem := config.validate()
-
-	if not problem.ok:
-		return problem.wrap("The room's voice configuration is not usable")
-
-	voice = DotVoiceRouter.new()
-	voice.name = "Voice"
-	voice.config = config
-	# [b]Everybody, not proximity, and this is the one place the two chat channels and
-	# the voice channel deliberately disagree.[/b] Text has a near channel because you can
-	# read two conversations at once and choose; voice you cannot, and a lobby where you
-	# walk out of earshot mid-sentence is a lobby where nobody uses voice. The proximity
-	# machinery is wired and reachable — `position_fn` is set below — so a deployment that
-	# wants it changes one line.
-	voice.default_channel = DotVoiceRouter.Channel.ALL
-	voice.proximity_range = config.proximity_range
-	voice.max_bytes_per_second = config.max_bytes_per_second
-	voice.send_fn = _send_voice
-	# The same answer text's proximity channel gets, from the same function. A second
-	# "where is this person" is a second thing that can be a tick out of step with the
-	# first, and the visible failure would be hearing somebody you cannot read.
-	voice.position_fn = _position_of
-	# And the same walls, from the same function, for the same reason.
-	voice.can_hear_fn = _can_hear
-
-	add_child(voice)
-
-	return DotResult.success(null)
-
-
 ## The voice format, which both ends must agree on exactly.
 ##
 ## [b]Static, and read by the client as well.[/b] [DotVoiceConfig.format_fingerprint]
@@ -587,80 +259,59 @@ static func voice_config() -> DotVoiceConfig:
 	return config
 
 
-## Where a relayed voice frame goes.
-func _send_voice(peer_id: int, payload: PackedByteArray) -> void:
-	if bridge == null or bridge.link == null:
-		return
+# --- Who somebody is, as this room answers it ---------------------------------
 
-	bridge.link.send_voice(peer_id, payload)
-
-
-# --- Peers -----------------------------------------------------------------
-
-## Somebody can now hear and be heard.
-func add_peer(peer_id: int) -> void:
-	if voice != null:
-		voice.add_peer(peer_id)
-
-
-func remove_peer(peer_id: int) -> void:
-	if voice != null:
-		voice.remove_peer(peer_id)
-
-	if chat != null:
-		# The rate limiter's and the repeat detector's memory of this peer, dropped.
-		# Without it a reconnecting player inherits whatever the last holder of that peer
-		# id had been saying, and the visible failure is "you are repeating yourself" to
-		# somebody who has said one thing.
-		chat.forget(peer_id)
-
-
-func _chat_peers() -> PackedInt32Array:
-	return bridge.ready_peers() if bridge != null else PackedInt32Array()
-
-
-func _session_for(peer_id: int) -> DotClientSession:
-	if server == null:
-		return null
-
-	return server.session_of(peer_id)
-
-
-func _name_of(peer_id: int) -> String:
-	var session := _session_for(peer_id)
-
-	if session != null:
-		return session.display_name
+## Who a peer is, for a punishment: the durable account uid.
+##
+## [b]Not the same answer [method _key_of] gives dot-chat[/b] — a punishment is against a
+## person who will come back, a chat line is attributed to somebody standing in this room
+## right now, and two guests connecting from one machine share a device id and therefore a
+## uid. `examples/sandbox.tscn` runs two clients in one process and found it.
+##
+## The base's answer, plus the one it cannot give: with no server, an offline run, the
+## session is the occupant, prefixed so it can never be mistaken for a real uid in a
+## stored punishment.
+func _subject_for_peer(peer_id: int) -> String:
+	if _session_for(peer_id) != null:
+		return super._subject_for_peer(peer_id)
 
 	var occupant := bridge.occupant_for_peer(peer_id) if bridge != null else null
-	return occupant.display_name if occupant != null else "player %d" % peer_id
+	return DotPunishmentSubject.for_uid("offline:%d" % occupant.id) \
+		if occupant != null else ""
 
 
-## The key a chat line is attributed to: the speaker's occupant, as a string.
+## The key a chat line is attributed to: the speaker's OCCUPANT, as a string.
 ##
-## [b]Not the account uid, and the difference is the subject of the comment on
-## [method _subject_for_peer].[/b] "Who said this" is a question about the room — the
-## bubble goes over a head, the name in the log is a name in this room, and a client
-## resolving it has a roster and nothing else. Two guests behind one device id share a
-## uid, so keying by that draws the second person's words over the first person's face,
-## and every count still matches.
-##
-## [b]It is still pseudonymous and it still never leaves this server as an account id.[/b]
-## An occupant id is dot-server's session id: it means nothing to anybody who was not in
-## this room at this moment, which is exactly the property dot-user's per-scope ids exist
-## for and dot-stats refuses an account id in order to keep.
+## Online that is the session's userid — the base's own answer, because an occupant id IS
+## dot-server's session id — and offline, with no session, it is still an answer. It is
+## still pseudonymous and never leaves this server as an account id: an occupant id means
+## nothing to anybody who was not in this room at this moment.
 func _key_of(peer_id: int) -> String:
 	var occupant := bridge.occupant_for_peer(peer_id) if bridge != null else null
 	return str(occupant.id) if occupant != null else ""
 
 
+func _name_of(peer_id: int) -> String:
+	if _session_for(peer_id) != null:
+		return super._name_of(peer_id)
+
+	var occupant := bridge.occupant_for_peer(peer_id) if bridge != null else null
+	return occupant.display_name if occupant != null else "player %d" % peer_id
+
+
+## Everybody who has said they can receive — NOT dot-server's playing sessions, the base's
+## answer. A session exists from the moment a socket connects; a ready peer is one that has
+## built its scene. Routing a chat line to the first is a "Node not found" per recipient
+## and a line nobody got. It is also the only answer offline has.
+func _chat_peers() -> PackedInt32Array:
+	return bridge.ready_peers() if bridge != null else PackedInt32Array()
+
+
 ## Where somebody is standing, as dot-chat and dot-voice both ask for it.
 ##
 ## [b]A [Vector3] with z fixed at zero, and the third component being always zero on both
-## sides is what makes this correct.[/b] Both addons compare with a 3D distance;
-## dot-npc-ai measured two NPCs standing on each other as 1.8 metres apart by asking a 3D
-## question about a horizontal problem. Here there is no vertical to lose, so the 3D
-## distance IS the 2D one.
+## sides is what makes this correct.[/b] Both addons compare with a 3D distance; here there
+## is no vertical to lose, so the 3D distance IS the 2D one.
 func _position_of(peer_id: int) -> Vector3:
 	if bridge == null or world == null:
 		return Vector3.ZERO
@@ -679,57 +330,166 @@ func _position_of(peer_id: int) -> Vector3:
 ## [b]The level's answer, not the addons'.[/b] dot-chat and dot-voice know a distance and
 ## nothing about walls, which is right: what blocks a voice is this room's decision and
 ## lives in [method RoomContent.within_earshot] beside the posts it tests. Both routers
-## ask this one function, so nobody can read a line from somebody they could not hear.
-## Before it the wing was a separate room geometrically and not acoustically: the
-## partition is 180 thick and "near" reaches 420, so two people either side of it were
-## a conversation.
+## ask this one function — [DotGameServices] wires it into both as their `can_hear_fn`
+## — so nobody can read a line from somebody they could not hear. Without it the wing is a
+## separate room geometrically and not acoustically: "near" reaches 420 and the partition
+## is 180 thick.
 func _can_hear(_listener: int, _speaker: int, listener_at: Vector3, speaker_at: Vector3) -> bool:
 	return RoomContent.within_earshot(
 		Vector2(listener_at.x, listener_at.y), Vector2(speaker_at.x, speaker_at.y)
 	)
 
 
-func _is_admin(peer_id: int) -> bool:
-	var session := _session_for(peer_id)
-	return session != null and session.is_admin()
+# --- The wire ------------------------------------------------------------------
 
-
-func _scoped(base: StringName) -> StringName:
-	return base if service_scope == &"" else StringName("%s:%s" % [base, service_scope])
-
-
-# --- Reporting -------------------------------------------------------------
-
-func describe_lines() -> PackedStringArray:
-	var out := PackedStringArray()
-
-	if chat != null:
-		out.append_array(chat.describe_lines())
-
-	if voice != null:
-		out.append_array(voice.describe_lines())
-
-	if moderation != null:
-		out.append_array(moderation.describe_lines())
-		out.append("punishments  %s" % (
-			"loaded" if punishments_loaded else "STILL LOADING — nothing is enforced"
-		))
-
-	return out
-
-
-## What this server accepts, for the site's `/` menu.
+## Where a routed line goes. dot-chat has already decided exactly who gets it.
 ##
-## Built at the relay's OWN source rather than at "chat", because the two answer different
-## questions: a relay configured as RCON reaches everything RCON reaches, and a menu built
-## from `chat_allowed` alone would hide an operator's whole toolbox from a deployment that
-## deliberately made their site admins remote administrators -- or, the other way round,
-## offer a records server's map change to somebody whose every attempt is refused.
+## The base's fan-out, plus one field: who said it, as an occupant id, so a client can put
+## a bubble over the right head. It is already in the wire — the key IS the occupant, see
+## [method _key_of] — and this lifts it into the one meta field this game's wire carries,
+## so a client need not parse a field it is meant to treat as opaque.
+func _send_chat(wire: Dictionary, recipients: PackedInt32Array) -> void:
+	if bridge == null:
+		return
+
+	var addressed := wire.duplicate()
+	var key := str(wire.get("s", ""))
+	var occupant_id := key.to_int() if key.is_valid_int() else 0
+
+	if occupant_id > 0:
+		addressed["x"] = {"o": occupant_id}
+
+	for peer_id in recipients:
+		# Peer by peer, never a broadcast. The router's whole job on a whisper is to
+		# produce a list of two, and handing that to a broadcast would undo it.
+		bridge.send_chat(int(peer_id), addressed)
+
+
+## Never at seating: the backlog waits for the welcome.
 ##
-## A method rather than a lambda because the relay re-reads it on every publish: the table
-## changes when a module loads, and a callable that closed over a list would publish the
-## table as it was at boot, for ever.
-func _relay_command_document() -> Array[Dictionary]:
-	if server == null or server.console == null:
-		return []
-	return server.console.command_document(relay_config.command_source as DotCmdContext.Source)
+## [DotGameServices.add_peer] would send it at once, and in this game that is too early: a
+## peer is added when dot-server says it spawned, and the client builds its scene after
+## that, so a line sent now lands on a node that does not exist, one "Node not found" per
+## line. `RoomModule._welcome` sends it once the peer has said it can receive. Voice is
+## still added at seating, by the base.
+func _peer_can_receive(_peer_id: int) -> bool:
+	return false
+
+
+# --- The live tools, in a room where nobody can be hurt ------------------------
+
+## What the live admin set means in a lobby, which is very little, and says so.
+##
+## [b]Moving people and renaming them is what a lobby needs a moderator for[/b] — so bring,
+## goto, send, return and rename work, and so do noclip, freeze and speed, the first being
+## the one a lobby actually needs, for somebody wedged in the furniture. Those three are
+## dot-2d's [Dot2DAdminModifiers], in the occupant's replicated state, because a server that
+## moved somebody their own client does not know about would rubber-band them;
+## `headless_net` measures that against a naive control. Blind and beacon are two flags on
+## the occupant the client draws — the blind replicated to its owner alone, the beacon to
+## everybody.
+##
+## The blind takes the room away and nothing else: the blinded person still walks, and
+## still has the chat log, the roster and the entry, because in a lobby those are how a
+## moderator tells them why. One who wants them to stop moving as well has freeze.
+func _mod_abilities() -> Dictionary:
+	return {
+		DotModTools.ACTION_RENAME: func(id: StringName, args: Dictionary) -> DotResult:
+			var occupant := _occupant(id)
+			if occupant == null:
+				return _nobody()
+			occupant.display_name = str(args["name"]).strip_edges().substr(0, 32)
+			return DotResult.success(occupant.display_name),
+		DotModTools.ACTION_NOCLIP: func(id: StringName, args: Dictionary) -> DotResult:
+			return Dot2DAdminModifiers.set_noclip(_occupant_state(id), bool(args["on"])),
+		DotModTools.ACTION_FREEZE: func(id: StringName, args: Dictionary) -> DotResult:
+			return Dot2DAdminModifiers.set_frozen(_occupant_state(id), bool(args["on"])),
+		DotModTools.ACTION_SPEED: func(id: StringName, args: Dictionary) -> DotResult:
+			return Dot2DAdminModifiers.set_speed(_occupant_state(id), float(args["scale"])),
+		DotModTools.ACTION_BLIND: func(id: StringName, args: Dictionary) -> DotResult:
+			var occupant := _occupant(id)
+			if occupant == null:
+				return _nobody()
+			occupant.blinded = bool(args["on"])
+			return DotResult.success(occupant.blinded),
+		DotModTools.ACTION_BEACON: func(id: StringName, args: Dictionary) -> DotResult:
+			var occupant := _occupant(id)
+			if occupant == null:
+				return _nobody()
+			occupant.beacon = bool(args["on"])
+			return DotResult.success(occupant.beacon),
+	}
+
+
+## Everything else, refused with a reason `modtools` prints.
+func _mod_unsupported() -> Dictionary:
+	var harmless := "nobody can be hurt in a lobby"
+	var nothing := "there is nothing to hold in a lobby"
+
+	return {
+		DotModTools.ACTION_GRAVITY: "there is no gravity in a top-down room",
+		DotModTools.ACTION_GOD: harmless,
+		DotModTools.ACTION_BUDDHA: harmless,
+		DotModTools.ACTION_HEALTH: harmless,
+		DotModTools.ACTION_SLAY: harmless,
+		DotModTools.ACTION_SLAP: harmless,
+		DotModTools.ACTION_BURN: harmless,
+		DotModTools.ACTION_RESPAWN: "nobody dies in a lobby; bring or send moves somebody",
+		DotModTools.ACTION_GIVE: nothing,
+		DotModTools.ACTION_STRIP: nothing,
+	}
+
+
+func _mod_can_teleport() -> bool:
+	return true
+
+
+func _mod_position(id: StringName) -> Variant:
+	var occupant := _occupant(id)
+	return occupant.state.position if occupant != null else null
+
+
+func _mod_teleport(id: StringName, to: Variant) -> void:
+	var occupant := _occupant(id)
+
+	if occupant != null and to is Vector2:
+		occupant.state.position = to as Vector2
+		occupant.state.velocity = Vector2.ZERO
+
+
+## The two settings a lobby's tools differ in, before they are bound.
+##
+## A lobby has no respawn, and its "new body" is a game change — `RoomBridge.rebind`
+## re-adds everybody as a fresh occupant, and `RoomModule` then calls `respawned` for each —
+## so [constant PERSIST_ACROSS_CHANGE] is what survives it.
+func _mod_configure_tools(tools: Object) -> void:
+	var mod := tools as DotModTools
+
+	if mod == null:
+		return
+
+	mod.goto_standoff = GOTO_STANDOFF
+
+	for action in PERSIST_ACROSS_CHANGE:
+		if not mod.persist_on_respawn.has(action):
+			mod.persist_on_respawn.append(action)
+
+
+## The occupant a moderator named, or null. The id is the session userid as a string,
+## which is the occupant id — see [method _key_of].
+func _occupant(id: StringName) -> RoomOccupant:
+	if world == null or not is_instance_valid(world) or not String(id).is_valid_int():
+		return null
+
+	return world.occupant_for(String(id).to_int())
+
+
+## The state an admin modifier is written into, or null — which [Dot2DAdminModifiers]
+## refuses with a reason rather than crashing on.
+func _occupant_state(id: StringName) -> Dot2DState:
+	var occupant := _occupant(id)
+	return occupant.state if occupant != null else null
+
+
+func _nobody() -> DotResult:
+	return DotResult.fail(DotError.CODE_STATE, "Nobody by that id is in the room.")

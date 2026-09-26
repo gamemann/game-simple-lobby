@@ -55,16 +55,16 @@ tools/check.sh                # parse every script, then run every example
 tools/check.sh --parse        # the parse pass on its own
 ```
 
-479 checks across six suites:
+484 checks across six suites:
 
 | | | |
 | --- | --- | --- |
 | `examples/headless_room.tscn` | 84 | the room alone: membership, walls, every level walked, determinism |
 | `examples/headless_stack.tscn` | 24 | the player layer: sides, classes, and the ring of seats |
 | `examples/headless_presentation.tscn` | 88 | settings, audio, effects, the console, the menus and the party, and how a client draws an admin's blind and beacon |
-| `examples/headless_net.tscn` | 84 | the wire and the netcode, over a lossy loopback, and who is told about a blind |
+| `examples/headless_net.tscn` | 88 | the wire and the netcode, over a lossy loopback, who is told about a blind, and a gag offline |
 | `examples/dedicated.tscn` | 143 | a real `DotServer` with the module in it, a moderator's live tools, and a game change under it |
-| `examples/sandbox.tscn` | 81 | **two real clients, over real sockets** |
+| `examples/sandbox.tscn` | 82 | **two real clients, over real sockets** |
 
 The last one is the one that matters. See CLAUDE.md.
 
@@ -78,7 +78,7 @@ for pair in dot_core:dot-core dot_2d:dot-2d dot_net:dot-net \
 done
 ```
 
-The links are gitignored: a shipped build copies the addon folders in instead.
+The links are gitignored: a shipped build copies the addon folders in instead. `dot-bootstrap` links the whole set this project's `.gitignore` names, which includes [dot-game](https://github.com/modcommunity/dot-game): the module extends `DotGameModule` and the chat, voice and moderation layer extends `DotGameServices`, so the netcode, the roster, the tick and the teardown are that addon's and what is in `game/` is the lobby's own.
 
 ## Licence
 

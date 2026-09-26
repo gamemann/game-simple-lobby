@@ -39,7 +39,7 @@ const RoomModule := preload("../game/room_module.gd")
 ## A build step, not a runtime path: it hashes every file synchronously, which is right in
 ## a CLI and wrong in a frame.
 
-const CHANNEL := "room.publish"
+# No `const CHANNEL`. A command-line tool: it prints to the terminal that ran it.
 
 const DEFAULT_OUT := "user://room_published"
 const DEFAULT_KEY := "user://room_keys/content.key"

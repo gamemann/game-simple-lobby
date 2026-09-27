@@ -377,6 +377,16 @@ The snug is what made it worth looking at. The spawn is the ring's east seat and
 nothing about what is standing in it, so a share of its answers are inside something. A
 lobby that puts somebody inside a bench is broken quietly.
 
+### Every walk is timed now, because every walk passed at a third of the speed (`[bot-drive-1]`, 2026-09-27)
+
+The family found its bots crossing maps at a fraction of their speed behind checks that passed, because a check that asks "did it arrive" cannot tell a walker from a crawler given enough ticks. **Every walk in this project was that shape.** Each leg in `headless_room` holds one direction for up to ten seconds, 2,600 units at the room's speed in a room 1,800 across, so every arrival check passes whatever speed the walker went at — and that was not an argument, it was measured: with every command's stick at 30%, **all 90 of the old checks still passed**.
+
+So each leg is recorded as a trail (`_begin_leg` / `_stride`) and `_leg` prints, always, the distance walked to the first tick the arrival held, the time, the straight line from the start, and the average against `max_speed` — and `_at_pace` asserts it is at least `AT_PACE` (0.9), run-up included (five ticks to 260 at 3200 u/s²). Measured, every leg of the wing, the gallery, the snug, the alcove and the booth is **94-99% of 260 u/s, and walked in a straight line** (the distance walked equals the crow's): no lane in the room makes a walker slide along a post to get through it. A slide would show here before any arrival check noticed. `walking` itself now asserts that a held direction travels at exactly `max_speed` (260.00), that half a second covers what that speed owes less the run-up (121.6 against 119.4; it asked for "more than 40"), and that two keys held together are the same speed rather than 1.41 or 0.71 of it.
+
+Armed with the stick at 30%: exactly the 18 new checks fail and nothing else does.
+
+**`headless_net` had a worse one.** Its prediction section walked "toward the middle of the room", which has been the island since the room was furnished: the walker stopped against it after 220 units, both ends stood still for the rest of the 90 ticks, and **"while walking the client leads the server by 0 units, which is the lead"** was measured between two people pressed against a table. It walks `_clear_heading` now and prints 381 units on the client and 355 on the server of 390 owed, both at 260 u/s; the lead reads **26 units** (the comment above it always said "about 26"), and is bounded below as well as above. Armed by putting the walk to the middle back: three checks fail. `sandbox`'s "the server moved them" walks into the same island over a real socket, and a walk that ends at an obstacle covers the route's length at any speed (220 of 220 at 30% stick); it now asserts the server's fastest tick is `max_speed`, which fails at 78 of 260 with the stick at 30%.
+
 ### What the furniture cost in the netcode suite, and what it did not
 
 The "under loss" section's correction rate went from 0.325 to 0.475 when the room gained
@@ -524,12 +534,12 @@ tools/check.sh                # every suite ci.yml names, after a parse pass
 
 | | | |
 | --- | --- | --- |
-| `headless_room` | 91 | the room alone. Membership, walls, every level walked by a held direction, a flood over the whole floor for sealed pockets, and two worlds replaying the same commands bit-identically |
+| `headless_room` | 108 | the room alone. Membership, walls, every level walked by a held direction, a flood over the whole floor for sealed pockets, and two worlds replaying the same commands bit-identically |
 | `headless_stack` | 24 | the player layer: the collision layout, the two sides, the class as a choice nothing applies, and the ring of seats — filled past eight, because two arrivals cannot tell a seat chooser from a coin |
 | `headless_presentation` | 101 | settings, audio, effects, the console and the party — **none of which `headless_room` can reach**, because that one is `RoomWorld` alone and has no client in it |
-| `headless_net` | 88 | every encoder against its decoder, then a session over a lossy delaying loopback, then a walk into the furniture, and a gag that reaches the offline chat |
+| `headless_net` | 89 | every encoder against its decoder, then a session over a lossy delaying loopback, then a walk into the furniture, and a gag that reaches the offline chat |
 | `dedicated` | 143 | a real `DotServer`, a real module, a real WebSocket listener, and the props, chat, voice, moderation and identity halves — and a game change under the loaded module, to another room, to a game that is not one, and back |
-| `sandbox` | 82 | **a real server and two real clients, over real sockets, in one process** — chat, props and voice all cross a wire here and nowhere else, and a newcomer is welcomed exactly once |
+| `sandbox` | 83 | **a real server and two real clients, over real sockets, in one process** — chat, props and voice all cross a wire here and nowhere else, and a newcomer is welcomed exactly once |
 
 **The list of suites lives in `.github/workflows/ci.yml` and nowhere else.** `tools/check.sh` reads its `suites:` line and fails if `release.yml`'s differs. Before that, check.sh carried its own list, which had lost `headless_stack`, and CI auto-detected `examples/headless_*` — so neither `dedicated` nor `sandbox`, the two that run a real server, ever ran in CI.
 

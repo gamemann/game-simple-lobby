@@ -30,7 +30,7 @@ const CLIENT_ID := RoomOffline.CLIENT_OCCUPANT
 ## A second person, with no connection. Peer 0, and the thing peer 0 must never mean.
 const GUEST_ID := 500002
 
-const CHECKS := 88
+const CHECKS := 89
 
 var _passed := 0
 var _failed := 0
@@ -391,27 +391,44 @@ func _test_prediction() -> void:
 		_done()
 		return
 
-	# Toward the middle of the room, whichever corner the deterministic spawn put them
-	# in. A fixed direction walks into a wall on some seeds and measures the wall.
+	# Along a heading clear of everything for a whole walk, from wherever the spawn put
+	# them. [b]This walked toward the middle of the room[/b], which was open floor when it
+	# was written and has been the island since: the walker stopped against it after
+	# 220 units, both ends stood still for the rest of the 90 ticks, and "while walking
+	# the client leads the server by 0 units" was measured between two people pressed
+	# against a table. Every check passed. A fixed direction walks into a wall on some
+	# seeds; a direction at the middle walks into the island on all of them.
 	var start := pair.client_world.occupant_for(CLIENT_ID).position()
+	var heading := _clear_heading(start)
+	_check(heading != Vector2.ZERO, "there is open floor to walk from the spawn")
 	var command := Dot2DCommand.new()
-	command.move = (pair.client_world.arena.bounds.get_center() - start).normalized()
+	command.move = heading if heading != Vector2.ZERO else Vector2.RIGHT
 
 	await _pump(pair, 90, command)
 
 	var here := pair.client_world.occupant_for(CLIENT_ID)
 	var there := pair.server_world.occupant_for(CLIENT_ID)
 
+	# [b]How far, against how far 90 ticks at the room's speed is.[/b] These asked for
+	# "more than 40 units", which a walker at a sixth of its speed passes, and which the
+	# old walk into the island passed at 220. Printed as well as asserted.
+	var top := pair.client_world.tunables.max_speed
+	var owed := top * 90.0 / float(RoomContent.TICK_RATE)
+	print("  ..    90 ticks holding a direction: %.0f units on the client's screen, %.0f on the server's, of %.0f at max_speed; %.0f and %.0f u/s against %.0f"
+		% [here.position().distance_to(start), there.position().distance_to(start), owed,
+			here.state.speed(), there.state.speed(), top])
 	_check(
-		here.position().distance_to(start) > 40.0,
-		"walking moves you on your own screen immediately (%.0f units)"
-			% here.position().distance_to(start),
+		here.position().distance_to(start) > owed * 0.9
+			and absf(here.state.speed() - top) < 0.5,
+		"walking moves you on your own screen immediately, at the room's speed (%.0f of %.0f units)"
+			% [here.position().distance_to(start), owed],
 		"a client that waited for the server would feel the whole round trip on every step"
 	)
 	_check(
-		there.position().distance_to(start) > 40.0,
-		"and the server agrees you moved (%.0f units)"
-			% there.position().distance_to(start),
+		there.position().distance_to(start) > owed * 0.8
+			and absf(there.state.speed() - top) < 0.5,
+		"and the server agrees you are walking at it (%.0f units, %.0f u/s)"
+			% [there.position().distance_to(start), there.state.speed()],
 		"an input stamped for a tick the server has already passed is discarded as late, "
 		+ "for ever, with no error on either end"
 	)
@@ -426,10 +443,13 @@ func _test_prediction() -> void:
 	# What has to be true is that they converge once the walking stops.
 	var lead := pair.client_net.clock.input_tick() - pair.client_net.clock.server_tick()
 	var moving_gap := here.position().distance_to(there.position())
+	# [b]Bounded below as well[/b], because it read 0 for as long as the walk ended at the
+	# island: two ends standing still agree perfectly and passed a check about a lead.
 	_check(
-		moving_gap < float(lead + 2) * 260.0 / 60.0,
-		"while walking the client leads the server by %.0f units, which is the lead"
-			% moving_gap
+		moving_gap < float(lead + 2) * top / 60.0
+			and moving_gap > float(lead - 2) * top / 60.0,
+		"while walking the client leads the server by %.0f units, which is the lead (%d ticks)"
+			% [moving_gap, lead]
 	)
 
 	await _pump(pair, 60, Dot2DCommand.new())

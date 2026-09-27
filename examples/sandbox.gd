@@ -32,7 +32,7 @@ const PORT := 27086
 const SERVER_DIR := "user://room_sandbox"
 
 ## Every check this suite runs, section counter included. See docs/testing.md.
-const CHECKS := 82
+const CHECKS := 83
 
 var _passed := 0
 var _failed := 0
@@ -637,11 +637,34 @@ func _test_walking() -> void:
 	command.move = (target - _other.world.occupant_for(theirs).position()).normalized()
 	_other.input.command_source = func() -> Dot2DCommand: return command
 
-	await _settle(180)
+	# [b]At what speed, not only whether.[/b] The walk ends against the island in the
+	# middle of the room, so the distance is the route's length whatever speed it was
+	# walked at: three seconds is time to cover it at a third of the room's speed. The
+	# server's fastest tick is what says the commands crossed the socket whole.
+	var walking := _module().world.occupant_for(theirs)
+	var fastest := 0.0
+
+	for _i in range(180):
+		await get_tree().physics_frame
+		if walking != null:
+			fastest = maxf(fastest, walking.state.speed())
 
 	_other.input.command_source = Callable()
 
 	var on_server := _module().world.occupant_for(theirs)
+	var top := _module().world.tunables.max_speed
+	var island_at := RoomContent.furniture()[0]
+	var route := before.distance_to(Vector2(island_at.x, island_at.y)) - island_at.z \
+		- RoomContent.OCCUPANT_RADIUS
+	print("  ..    the server walked them %.0f units of the %.0f to the island's edge, at up to %.0f u/s of a max_speed of %.0f"
+		% [on_server.position().distance_to(before) if on_server != null else 0.0, route,
+			fastest, top])
+	_check(
+		absf(fastest - top) < 0.5,
+		"a second client's held direction walks them at the room's speed on the server (%.0f of %.0f u/s)"
+			% [fastest, top],
+		"a distance cannot say this: the walk ends at the island whatever speed it was walked at"
+	)
 
 	_check(
 		on_server != null and on_server.position().distance_to(before) > 30.0,

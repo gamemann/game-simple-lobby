@@ -13,7 +13,7 @@ const RoomWorld := preload("../game/room_world.gd")
 ## Exits non-zero on any failure. No netcode, no server, no rendering — this is
 ## [RoomWorld] alone, which is the only part of the game that decides anything.
 
-const CHECKS := 91
+const CHECKS := 108
 
 var _passed := 0
 var _failed := 0
@@ -27,6 +27,28 @@ var _failures := PackedStringArray()
 ## dot-2d-hungry lost eight checks that way and the reported total went *up*.
 var _entered := 0
 var _completed := 0
+
+## Where the walker of the leg being driven has been, a point a tick from where it started.
+##
+## [b]A route check here reads a position, and a position cannot say how the walker got
+## there.[/b] Every leg below holds a direction for up to ten seconds, which at the room's
+## speed is 2,600 units in a room 1,800 across, so a walker at a third of its speed
+## arrives at every one of them and passes: with the stick at 30%, all 90 of the checks
+## this file had before the trail still passed. The trail is what turns "arrived" into "arrived at walking pace":
+## [method _leg] reads the distance covered and the time taken to the first tick the
+## arrival held, and prints both beside the room's own [code]max_speed[/code] whether the
+## check passes or not — a detail line shows only on failure, and a number that is only
+## asserted is a number nobody reads again once it passes. The family learned that from
+## `[bot-drive-1]`: game-playground's bots crossed its maps at 1 m/s of a 7 for as long
+## as its checks existed, and every check passed.
+var _trail := PackedVector2Array()
+var _trail_world: RoomWorld = null
+
+## The fraction of [code]max_speed[/code] a leg's average has to reach to count as
+## walked at pace. [b]Averaged over the whole leg, run-up included[/b]: the room reaches
+## full speed in five ticks (260 at 3200 u/s²), which costs a leg of 300 units about 4%.
+## A walker sliding along a post rather than walking its lane is well under it.
+const AT_PACE := 0.9
 
 
 func _ready() -> void:
@@ -118,6 +140,54 @@ func _walk(direction: Vector2) -> Dot2DCommand:
 	var command := Dot2DCommand.new()
 	command.move = direction.normalized()
 	return command
+
+
+## Starts a leg from where occupant 1 of [param world] stands now.
+func _begin_leg(world: RoomWorld) -> void:
+	_trail_world = world
+	_trail = PackedVector2Array([world.occupant_for(1).position()])
+
+
+## One tick of occupant 1 holding [param direction], recorded on the leg's trail.
+func _stride(world: RoomWorld, direction: Vector2) -> void:
+	world.tick({1: _walk(direction)})
+	if world == _trail_world:
+		_trail.append(world.occupant_for(1).position())
+
+
+## How the leg went, up to the first tick [param arrived] held for the walker's position:
+## the distance walked, the time it took, the straight line from the start, and the
+## average speed against the room's [code]max_speed[/code]. [b]Printed, always.[/b]
+## Returns that average as a fraction of [code]max_speed[/code], or 0.0 if the walker
+## never arrived.
+func _leg(what: String, arrived: Callable) -> float:
+	var top := _trail_world.tunables.max_speed
+	var tick := _trail_world.tick_duration()
+	var walked := 0.0
+
+	for i in range(1, _trail.size()):
+		walked += _trail[i - 1].distance_to(_trail[i])
+
+		if arrived.call(_trail[i]):
+			var seconds := float(i) * tick
+			var speed := walked / seconds
+			print("  ..    %s: %.0f units walked in %.2f s (%.0f as the crow flies), %.0f u/s of a max_speed of %.0f (%.0f%%)"
+				% [what, walked, seconds, _trail[0].distance_to(_trail[i]), speed, top,
+					speed / top * 100.0])
+			return speed / top
+
+	print("  ..    %s: never arrived; %.0f units walked in %.2f s"
+		% [what, walked, float(_trail.size() - 1) * tick])
+	return 0.0
+
+
+## The check every leg gets: arrived, at pace, with the numbers in the line.
+func _at_pace(fraction: float, what: String) -> void:
+	_check(
+		fraction >= AT_PACE,
+		"%s, at walking pace (%.0f%% of max_speed)" % [what, fraction * 100.0],
+		"a walker that arrives slowly still arrives; only its speed tells a lane from a slide along a post"
+	)
 
 
 # --- Sections --------------------------------------------------------------
@@ -282,9 +352,41 @@ func _test_walking() -> void:
 	for _i in range(30):
 		world.tick({1: _walk(Vector2.RIGHT)})
 
+	# [b]How far, against how far the room's own numbers say.[/b] This asked for "more than
+	# 40 units" in half a second, which a walker at 35% of its speed passes. Half a
+	# second at max_speed, less what the run-up costs (v² / 2a), is the distance: 119.4
+	# units at 260 and 3200. Printed as well as asserted, because once it passes nobody
+	# reads the detail line again.
+	var top := world.tunables.max_speed
+	var seconds := 30.0 * world.tick_duration()
+	var owed := top * seconds - top * top / (2.0 * world.tunables.acceleration)
 	var moved := occupant.position() - start
-	_check(moved.x > 40.0, "half a second of walking moves you (%.0f units)" % moved.x)
+	print("  ..    holding a direction: %.2f u/s of a max_speed of %.2f; %.1f units in %.2f s, %.1f owed"
+		% [occupant.state.speed(), top, moved.x, seconds, owed])
+	_check(
+		absf(occupant.state.speed() - top) < 0.01,
+		"a walker holding a direction travels at the room's max_speed (%.2f of %.2f u/s)"
+			% [occupant.state.speed(), top]
+	)
+	_check(
+		moved.x >= owed * 0.98,
+		"half a second of walking covers what max_speed owes, run-up and all (%.1f of %.1f units)"
+			% [moved.x, owed]
+	)
 	_check(absf(moved.y) < 0.5, "and only in the direction asked for")
+
+	# And diagonally, which is two keys and the same speed: a command that summed its
+	# axes would walk corners at 1.41 times the room's speed, and one that clamped each
+	# axis would walk them at 0.71 of it on a pad.
+	occupant.state.velocity = Vector2.ZERO
+	for _i in range(30):
+		world.tick({1: _walk(Vector2(1.0, 1.0))})
+	print("  ..    holding two keys: %.2f u/s of a max_speed of %.2f" % [occupant.state.speed(), top])
+	_check(
+		absf(occupant.state.speed() - top) < 0.01,
+		"and holding two keys travels at the same speed, not 1.41 or 0.71 of it (%.2f u/s)"
+			% occupant.state.speed()
+	)
 
 	# The command is kept rather than cleared. Somebody who stopped dead on every tick a
 	# packet was late would stutter continuously on any connection worth having.
@@ -375,24 +477,36 @@ func _test_wing() -> void:
 	# is a door nobody uses.
 	occupant.state.position = Vector2(-200.0, 0.0)
 	occupant.state.velocity = Vector2.ZERO
+	_begin_leg(world)
 
 	for _i in range(600):
-		world.tick({1: _walk(Vector2.LEFT)})
+		_stride(world, Vector2.LEFT)
 
 	var through := occupant.position()
 	_check(
 		RoomContent.in_wing(through),
 		"and the doorway leads into the wing (%.0f, %.0f)" % [through.x, through.y]
 	)
+	_at_pace(
+		_leg("hall to wing through the doorway", func(at: Vector2) -> bool:
+			return RoomContent.in_wing(at)),
+		"and is walked through rather than squeezed through"
+	)
 
 	# Out again, so the wing is a room rather than a trap.
+	_begin_leg(world)
 	for _i in range(600):
-		world.tick({1: _walk(Vector2.RIGHT)})
+		_stride(world, Vector2.RIGHT)
 
 	_check(
 		not RoomContent.in_wing(occupant.position()),
 		"and back out to the hall (%.0f, %.0f)"
 			% [occupant.position().x, occupant.position().y]
+	)
+	_at_pace(
+		_leg("wing to hall", func(at: Vector2) -> bool:
+			return not RoomContent.in_wing(at)),
+		"and back out"
 	)
 
 	# The wing has something in it. A second room with nothing to stand behind is a
@@ -416,9 +530,10 @@ func _test_wing() -> void:
 	var walker := world.occupant_for(1)
 	walker.state.position = Vector2(-750.0, 0.0)
 	walker.state.velocity = Vector2.ZERO
+	_begin_leg(world)
 
 	for _i in range(600):
-		world.tick({1: _walk(Vector2.UP)})
+		_stride(world, Vector2.UP)
 
 	var north := walker.position()
 	_check(
@@ -427,12 +542,18 @@ func _test_wing() -> void:
 			% [north.x, north.y],
 		"one piece of furniture in a 280-wide strip closes it, and nothing else notices"
 	)
+	_at_pace(
+		_leg("the wing, middle to north end", func(at: Vector2) -> bool:
+			return RoomContent.in_wing(at) and at.y < -420.0),
+		"and walked, not scraped along a post"
+	)
 
 	# And out the other end. The partition has two ways through it, so the wing is a
 	# circuit rather than a pocket you have to back out of — which is what stops one
 	# person standing in a doorway from being a locked door.
+	_begin_leg(world)
 	for _i in range(400):
-		world.tick({1: _walk(Vector2.RIGHT)})
+		_stride(world, Vector2.RIGHT)
 
 	var out := walker.position()
 	_check(
@@ -440,20 +561,31 @@ func _test_wing() -> void:
 		"and left by the north gate rather than by the door it came in (%.0f, %.0f)"
 			% [out.x, out.y]
 	)
+	_at_pace(
+		_leg("the wing's north gate, out to the hall", func(at: Vector2) -> bool:
+			return not RoomContent.in_wing(at)),
+		"and out through the gate"
+	)
 
 	# South, the whole way, from the same start. A lane that exists only north of the
 	# doorway is half a room.
 	walker.state.position = Vector2(-750.0, 0.0)
 	walker.state.velocity = Vector2.ZERO
+	_begin_leg(world)
 
 	for _i in range(600):
-		world.tick({1: _walk(Vector2.DOWN)})
+		_stride(world, Vector2.DOWN)
 
 	var south := walker.position()
 	_check(
 		RoomContent.in_wing(south) and south.y > 420.0,
 		"and from its middle to its south end (%.0f, %.0f)" % [south.x, south.y],
 		"the south end is a dead end by design, but it has to be reachable"
+	)
+	_at_pace(
+		_leg("the wing, middle to south end", func(at: Vector2) -> bool:
+			return RoomContent.in_wing(at) and at.y > 420.0),
+		"and walked"
 	)
 	_done()
 
@@ -496,9 +628,10 @@ func _test_gallery() -> void:
 	# than about the path somebody found through it.
 	occupant.state.position = Vector2(-350.0, -180.0)
 	occupant.state.velocity = Vector2.ZERO
+	_begin_leg(world)
 
 	for _i in range(600):
-		world.tick({1: _walk(Vector2.UP)})
+		_stride(world, Vector2.UP)
 
 	var mouth := occupant.position()
 	_check(
@@ -507,12 +640,18 @@ func _test_gallery() -> void:
 			% [mouth.x, mouth.y],
 		"the pillars are the doorposts; a mouth narrower than a walker is a wall"
 	)
+	_at_pace(
+		_leg("hall to the gallery's west mouth", func(at: Vector2) -> bool:
+			return at.y < RoomContent.GALLERY_Y - RoomContent.GALLERY_POST_RADIUS),
+		"and walks into it"
+	)
 
 	var went_in := false
 	var shallowest := -INF
+	_begin_leg(world)
 
 	for _i in range(900):
-		world.tick({1: _walk(Vector2.RIGHT)})
+		_stride(world, Vector2.RIGHT)
 
 		if RoomContent.in_gallery(occupant.position()):
 			went_in = true
@@ -532,6 +671,12 @@ func _test_gallery() -> void:
 		"and leaves by the east mouth rather than backing out of the west (%.0f, %.0f)"
 			% [out.x, out.y],
 		"a nook with one way in is a pocket, and one person standing in it is a locked door"
+	)
+	_at_pace(
+		_leg("the gallery, west mouth to east", func(at: Vector2) -> bool:
+			return (not RoomContent.in_gallery(at) and at.x > 0.0
+				and at.y < RoomContent.GALLERY_Y)),
+		"and walks its length"
 	)
 
 	# --- It is empty, and that is the level rather than an omission ---------
@@ -641,9 +786,10 @@ func _test_snug() -> void:
 	walker.state.velocity = Vector2.ZERO
 	var nearest_seat := INF
 	var nearest_post := INF
+	_begin_leg(world)
 
 	for _i in range(600):
-		world.tick({1: _walk(Vector2.DOWN)})
+		_stride(world, Vector2.DOWN)
 		nearest_seat = minf(
 			nearest_seat, walker.position().distance_to(seat_at) - seat.z - walker.state.radius
 		)
@@ -660,6 +806,11 @@ func _test_snug() -> void:
 			% [down.x, down.y],
 		"the gate is a door against the wall; a post or a seat in the lane is a cork"
 	)
+	_at_pace(
+		_leg("the benches down through the snug's east gate", func(at: Vector2) -> bool:
+			return RoomContent.in_snug(at) and at.y > RoomContent.SNUG_GATE_Y),
+		"and walks in"
+	)
 	# [b]No nearer than the gate's own post, rather than merely not touching.[/b] A seat
 	# whose face stood on the gate's inner edge would be passed exactly as close as the
 	# post beside it is; any closer and it is standing in the lane. The first version of
@@ -673,9 +824,10 @@ func _test_snug() -> void:
 
 	var inside := false
 	var went_back := false
+	_begin_leg(world)
 
 	for _i in range(600):
-		world.tick({1: _walk(Vector2.LEFT)})
+		_stride(world, Vector2.LEFT)
 
 		if RoomContent.in_snug(walker.position()):
 			inside = true
@@ -694,6 +846,12 @@ func _test_snug() -> void:
 		"and leaves by the south gate (%.0f, %.0f)" % [out.x, out.y],
 		"a corner room with one way out is a pocket, and one person in it is a locked door"
 	)
+	_at_pace(
+		_leg("across the snug and out of its south gate", func(at: Vector2) -> bool:
+			return (not RoomContent.in_snug(at) and at.x < RoomContent.SNUG_X
+				and at.y > RoomContent.SNUG_GATE_Y)),
+		"and walks across"
+	)
 
 	# --- And the other way round -------------------------------------------
 
@@ -701,9 +859,10 @@ func _test_snug() -> void:
 		RoomContent.SNUG_X - 150.0, RoomContent.ROOM_EXTENT.y - 30.0
 	)
 	walker.state.velocity = Vector2.ZERO
+	_begin_leg(world)
 
 	for _i in range(600):
-		world.tick({1: _walk(Vector2.RIGHT)})
+		_stride(world, Vector2.RIGHT)
 
 	var along := walker.position()
 	_check(
@@ -711,14 +870,25 @@ func _test_snug() -> void:
 		"in by the south gate and along the wall to the corner (%.0f, %.0f)"
 			% [along.x, along.y]
 	)
+	_at_pace(
+		_leg("in by the snug's south gate", func(at: Vector2) -> bool:
+			return RoomContent.in_snug(at) and at.x > RoomContent.SNUG_GATE_X),
+		"walked, both ways round"
+	)
 
+	_begin_leg(world)
 	for _i in range(600):
-		world.tick({1: _walk(Vector2.UP)})
+		_stride(world, Vector2.UP)
 
 	var up := walker.position()
 	_check(
 		not RoomContent.in_snug(up) and up.y < RoomContent.SNUG_Y,
 		"and out by the east gate (%.0f, %.0f)" % [up.x, up.y]
+	)
+	_at_pace(
+		_leg("out by the snug's east gate", func(at: Vector2) -> bool:
+			return not RoomContent.in_snug(at) and at.y < RoomContent.SNUG_Y),
+		"and out"
 	)
 
 	# --- Every gap it makes, against what is actually there ----------------
@@ -810,9 +980,10 @@ func _test_alcove() -> void:
 		walker.state.velocity = Vector2.ZERO
 		var inside := false
 		var drift := 0.0
+		_begin_leg(world)
 
 		for _i in range(600):
-			world.tick({1: _walk(way)})
+			_stride(world, way)
 			drift = maxf(drift, absf(walker.position().y - lane_y))
 
 			if RoomContent.in_alcove(walker.position()):
@@ -836,6 +1007,11 @@ func _test_alcove() -> void:
 				and (out.x - RoomContent.ALCOVE_X) * -from > RoomContent.ALCOVE_RADIUS,
 			"and comes out of the %s gate into the hall (%.0f, %.0f)" % [heading, out.x, out.y],
 			"an alcove with one way out is a pocket, and one person in it is a locked door"
+		)
+		_at_pace(
+			_leg("along the wall through the alcove, %s" % heading, func(at: Vector2) -> bool:
+				return (at.x - RoomContent.ALCOVE_X) * -from > RoomContent.ALCOVE_RADIUS + 40.0),
+			"and walks it"
 		)
 
 	# --- The bow has no hole in it, and makes no slot ---------------------------
@@ -907,9 +1083,10 @@ func _test_booth() -> void:
 		walker.state.position = from
 		walker.state.velocity = Vector2.ZERO
 		var drift := 0.0
+		_begin_leg(world)
 
 		for _i in range(600):
-			world.tick({1: _walk(way)})
+			_stride(world, way)
 			drift = maxf(drift, absf(walker.position().x - door.x))
 			var past := walker.position().y < door.y - 120.0 if way == Vector2.UP \
 				else walker.position().y > door.y + 120.0
@@ -922,6 +1099,13 @@ func _test_booth() -> void:
 			"holding %s through the booth's doorway goes %s touching nothing (%.1f off the line)"
 				% ["north" if way == Vector2.UP else "south",
 					"in" if way == Vector2.UP else "out", drift]
+		)
+		# To the break condition above, which is 120 past the door on the far side.
+		_at_pace(
+			_leg("through the booth's doorway, %s" % ("in" if way == Vector2.UP else "out"),
+				func(at: Vector2) -> bool:
+					return at.y < door.y - 120.0 if way == Vector2.UP else at.y > door.y + 120.0),
+			"and walks it"
 		)
 
 	# Its walls are walls: straight at the south arm beside the doorway, and at the west arm.

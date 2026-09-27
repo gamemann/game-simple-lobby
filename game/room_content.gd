@@ -146,10 +146,11 @@ static func _build_furniture() -> PackedVector3Array:
 
 		# The quarters. Placed on a rectangle rather than a circle so the room reads as
 		# a room: four points on a circle in a rectangular space look like a mistake.
-		Vector3(-460.0, -280.0, 46.0),
-		Vector3(460.0, -280.0, 46.0),
-		Vector3(-460.0, 280.0, 46.0),
-		Vector3(460.0, 280.0, 46.0),
+		# Named since the bay (2026-09-27), whose front is joined to the south-east one.
+		Vector3(-PILLAR_AT.x, -PILLAR_AT.y, PILLAR_RADIUS),
+		Vector3(PILLAR_AT.x, -PILLAR_AT.y, PILLAR_RADIUS),
+		Vector3(-PILLAR_AT.x, PILLAR_AT.y, PILLAR_RADIUS),
+		Vector3(PILLAR_AT.x, PILLAR_AT.y, PILLAR_RADIUS),
 
 		# Two benches by the east wall, far enough apart to stand between.
 		Vector3(700.0, -110.0, 60.0),
@@ -215,6 +216,13 @@ static func _build_furniture() -> PackedVector3Array:
 	# An L of posts closing the corner off, with one doorway in its south arm. See
 	# [constant BOOTH_X].
 	out.append_array(booth_screen())
+
+	# --- The bay off the south wall ------------------------------------------
+	#
+	# A room between the alcove and the snug, its front joined to the south-east pillar,
+	# a gate at each end of it against the wall. See [constant BAY_Y]. Last in the list,
+	# so every piece before it resolves in the order it always did.
+	out.append_array(bay_screen())
 
 	return out
 
@@ -641,6 +649,110 @@ static func in_alcove(at: Vector2) -> bool:
 	)
 
 
+# --- The bay -----------------------------------------------------------------
+
+## Where the four pillars stand, as the south-east one: the others are its mirror images.
+## Named for the bay, whose front is joined to that pillar; [method furniture] places all
+## four from it, at the same numbers they always had.
+const PILLAR_AT := Vector2(460.0, 280.0)
+
+## How big a pillar is.
+const PILLAR_RADIUS := 46.0
+
+## The bay's posts: the snug's, for the snug's reason. A screen, and its neighbours bound
+## it.
+const BAY_POST_RADIUS := 30.0
+
+## The line the bay's front stands on.
+##
+## [b]Added 2026-09-27: the room the south wall's walk passes through.[/b] The stretch of
+## the south wall between the alcove and the snug was the last part of the room nothing
+## used, and the south-east pillar is why: a wall standing clear of it by the front door's
+## width can be at most 182 wide (x 112 to 294), which is a cupboard. So the bay does not
+## stand clear of it. [b]Its front is joined to the pillar[/b], the way the gallery's
+## screen uses the north pillars as its doorposts: the post under the pillar overlaps it
+## by [constant GALLERY_OVERLAP], the partition's twenty, so the pillar is part of the
+## wall rather than a slot beside it. That puts the front here, and the floor behind it
+## 194 deep: the door's width of lane along the wall, and 94 above it, which is two people
+## (88) standing out of the lane talking.
+##
+## It also keeps the spawn ring's south-east seat, (277, 277), out of the wall: the nearest
+## front post's face stands 31 from it, 9 more than a person, the alcove's margin.
+const BAY_Y := PILLAR_AT.y + PILLAR_RADIUS + BAY_POST_RADIUS - GALLERY_OVERLAP
+
+## The line the bay's east arm stands on.
+##
+## [b]Derived so the way between it and the snug's west arm is exactly
+## [constant DOORWAY_SPAN][/b]: the passage from the hall down to the wall is a door, not a
+## squeeze, and moving the snug moves the bay's arm with it.
+const BAY_EAST_X := SNUG_X - SNUG_POST_RADIUS - DOORWAY_SPAN - BAY_POST_RADIUS
+
+## The centre of each arm's end post against the south wall.
+##
+## [b]Derived so each gate is exactly [constant DOORWAY_SPAN] against the wall[/b], the
+## way [constant SNUG_GATE_Y] derives the snug's south gate — it is the same number, and
+## the alcove's end posts stand on it too, so the lane along the south wall is one lane
+## the door's width from the alcove's west gate to the east wall.
+const BAY_GATE_Y := ROOM_EXTENT.y - DOORWAY_SPAN - BAY_POST_RADIUS
+
+
+## The line the bay's west arm stands on: the front door's width east of the alcove's east
+## end post, derived from it, so the passage between the two is a door.
+##
+## A function rather than a constant because the alcove's end is trigonometry.
+static func bay_west_x() -> float:
+	return (
+		ALCOVE_X + cos(alcove_end_angle()) * ALCOVE_RADIUS
+		+ ALCOVE_POST_RADIUS + DOORWAY_SPAN + BAY_POST_RADIUS
+	)
+
+
+## The post of the bay's front that stands under the south-east pillar.
+static func bay_pillar_post() -> Vector2:
+	return Vector2(PILLAR_AT.x, BAY_Y)
+
+
+## The bay's posts: the front from the west corner east to the post under the pillar and
+## on to the east corner, then the west arm and the east arm down to their gates.
+##
+## [b]Every run is spaced evenly between two placed posts[/b] (the corners, the post under
+## the pillar, the gate posts) at no more than the partition's overlap apart, the alcove's
+## rule: the count comes from the overlap, and the ends are where the derivations put
+## them rather than wherever a fixed spacing happens to run out.
+##
+## Separate from [method furniture] for [method gallery_screen]'s reason. The pillar is
+## not in it: it is furniture, and not a wall for [method within_earshot], and the post
+## under it is what seals the corner for a voice.
+static func bay_screen() -> PackedVector3Array:
+	var out := PackedVector3Array()
+	var west := bay_west_x()
+	var under := bay_pillar_post()
+
+	_bay_run(out, Vector2(west, BAY_Y), under, true)
+	_bay_run(out, under, Vector2(BAY_EAST_X, BAY_Y), false)
+	_bay_run(out, Vector2(west, BAY_Y), Vector2(west, BAY_GATE_Y), false)
+	_bay_run(out, Vector2(BAY_EAST_X, BAY_Y), Vector2(BAY_EAST_X, BAY_GATE_Y), false)
+	return out
+
+
+## Posts evenly from [param from] to [param to], both ends included when
+## [param with_start], and only the far end otherwise (the near one is already placed).
+static func _bay_run(
+	out: PackedVector3Array, from: Vector2, to: Vector2, with_start: bool
+) -> void:
+	var count := int(ceil(from.distance_to(to) / (BAY_POST_RADIUS * 2.0 - GALLERY_OVERLAP)))
+
+	for index in range(0 if with_start else 1, count + 1):
+		var at := from.lerp(to, float(index) / float(count))
+		out.append(Vector3(at.x, at.y, BAY_POST_RADIUS))
+
+
+## Whether [param at] is inside the bay: between its arms' lines and behind its front's.
+## A point in either gate counts once it is past the arm's line, the snug's rule.
+static func in_bay(at: Vector2) -> bool:
+	return at.x > bay_west_x() and at.x < BAY_EAST_X and at.y > BAY_Y
+
+
 ## Whether [param at] is in the wing behind the partition rather than in the hall.
 ##
 ## [b]Read from the same constant the posts are placed from.[/b] A check that wrote
@@ -651,8 +763,10 @@ static func in_wing(at: Vector2) -> bool:
 
 # --- Earshot ------------------------------------------------------------------
 
-## What stops a voice: the partition, the gallery's screen, the snug's L and the alcove's
-## bow. Everything else in [method furniture] is not a wall and is not here.
+## What stops a voice: the partition, the gallery's screen, the snug's L, the alcove's
+## bow, the booth's L and the bay's three sides. Everything else in [method furniture] is
+## not a wall and is not here — the south-east pillar included, although the bay's front
+## is joined to it: the front's post under the pillar is what closes that corner.
 ##
 ## [b]A wall is something built to make a second space; furniture is something in one.[/b]
 ## The island is "small enough to see over", a pillar is a landmark, and the benches, the
@@ -674,6 +788,7 @@ static func _build_walls() -> PackedVector3Array:
 	out.append_array(snug_screen())
 	out.append_array(alcove_screen())
 	out.append_array(booth_screen())
+	out.append_array(bay_screen())
 	return out
 
 

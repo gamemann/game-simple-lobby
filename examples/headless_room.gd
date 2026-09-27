@@ -13,7 +13,7 @@ const RoomWorld := preload("../game/room_world.gd")
 ## Exits non-zero on any failure. No netcode, no server, no rendering — this is
 ## [RoomWorld] alone, which is the only part of the game that decides anything.
 
-const CHECKS := 108
+const CHECKS := 124
 
 var _passed := 0
 var _failed := 0
@@ -72,6 +72,7 @@ func _run() -> void:
 	_test_snug()
 	_test_alcove()
 	_test_booth()
+	_test_bay()
 	_test_earshot()
 	_test_reach()
 	_test_determinism()
@@ -1167,6 +1168,236 @@ func _test_booth() -> void:
 	_done()
 
 
+## The bay: a room off the south wall between the alcove and the snug, its front joined to
+## the south-east pillar. See [constant RoomContent.BAY_Y].
+##
+## [b]Driven as a circuit, and then as the walk it makes.[/b] From the hall down the
+## passage west of it, east along the wall through both its gates, and up the passage east
+## of it back to the hall: three held directions, nothing steering. Then the south wall end
+## to end on one held direction, from west of the alcove into the snug — the route the
+## alcove, the bay and the snug make together, which nothing had walked whole.
+func _test_bay() -> void:
+	_section("the bay off the south wall")
+
+	var world := _world(&"bay")
+	world.add_occupant(1, "Stroller")
+	var walker := world.occupant_for(1)
+	var screen := RoomContent.bay_screen()
+	var west := RoomContent.bay_west_x()
+	var east := RoomContent.BAY_EAST_X
+	var extent := RoomContent.ROOM_EXTENT
+	var r := RoomContent.BAY_POST_RADIUS
+	var lane_y := extent.y - RoomContent.DOORWAY_SPAN * 0.5
+	# The middles of the two passages, which is where somebody walking without aiming is.
+	var west_passage := west - r - RoomContent.DOORWAY_SPAN * 0.5
+	var east_passage := east + r + RoomContent.DOORWAY_SPAN * 0.5
+	# Everything the circuit passes, so "touching nothing" is measured against what is there.
+	var near := PackedVector3Array(screen)
+	near.append_array(RoomContent.alcove_screen())
+	near.append_array(RoomContent.snug_screen())
+	near.append(Vector3(RoomContent.PILLAR_AT.x, RoomContent.PILLAR_AT.y, RoomContent.PILLAR_RADIUS))
+
+	var clearance := func() -> float:
+		var least := INF
+		for piece in near:
+			least = minf(least, walker.position().distance_to(Vector2(piece.x, piece.y))
+				- piece.z - walker.state.radius)
+		return least
+
+	# --- Its walls are walls ------------------------------------------------------
+
+	# At the front's middle from the hall, at the west arm from the passage beside it, and
+	# at the east arm from the other side: the three directions a hole would be a way in.
+	var held := 0
+	for probe in [
+		[Vector2((west + RoomContent.PILLAR_AT.x) * 0.5, 200.0), Vector2.DOWN],
+		[Vector2(west_passage, 400.0), Vector2.RIGHT],
+		[Vector2(east_passage, 400.0), Vector2.LEFT],
+	]:
+		walker.state.position = probe[0]
+		walker.state.velocity = Vector2.ZERO
+		for _i in range(600):
+			world.tick({1: _walk(probe[1])})
+		if not RoomContent.in_bay(walker.position()):
+			held += 1
+
+	_check(held == 3, "walking into its front or either arm does not go through (%d of 3 held)" % held)
+
+	# --- The circuit: down the west passage, along the wall, up the east passage ----
+
+	walker.state.position = Vector2(west_passage, 200.0)
+	walker.state.velocity = Vector2.ZERO
+	var least := INF
+	_begin_leg(world)
+
+	for _i in range(600):
+		_stride(world, Vector2.DOWN)
+		least = minf(least, clearance.call())
+		if walker.position().y >= lane_y - 10.0:
+			break
+
+	_check(
+		walker.position().y >= lane_y - 10.0 and least > 0.5,
+		"holding south from the hall goes down the passage beside the alcove to the wall, touching nothing (%.1f clear)"
+			% least
+	)
+	_at_pace(
+		_leg("down the passage west of the bay", func(at: Vector2) -> bool:
+			return at.y >= lane_y - 10.0),
+		"and walks it"
+	)
+
+	least = INF
+	var inside := false
+	_begin_leg(world)
+
+	for _i in range(600):
+		_stride(world, Vector2.RIGHT)
+		least = minf(least, clearance.call())
+		inside = inside or RoomContent.in_bay(walker.position())
+		if walker.position().x >= east_passage - 10.0:
+			break
+
+	_check(
+		inside and walker.position().x >= east_passage - 10.0 and least > 0.5,
+		"holding east along the wall goes in at the west gate and out of the east one, touching nothing (%.1f clear)"
+			% least,
+		"both gates are the door's width against the wall; a push here is a post in the lane"
+	)
+	_at_pace(
+		_leg("along the wall through the bay", func(at: Vector2) -> bool:
+			return at.x >= east_passage - 10.0),
+		"and walks it"
+	)
+
+	least = INF
+	_begin_leg(world)
+
+	for _i in range(600):
+		_stride(world, Vector2.UP)
+		least = minf(least, clearance.call())
+		if walker.position().y <= 200.0:
+			break
+
+	_check(
+		walker.position().y <= 200.0 and least > 0.5,
+		"and holding north goes up the passage beside the snug into the hall, touching nothing (%.1f clear)"
+			% least
+	)
+	_at_pace(
+		_leg("up the passage east of the bay", func(at: Vector2) -> bool:
+			return at.y <= 200.0),
+		"and walks it"
+	)
+
+	# --- The south wall, end to end ---------------------------------------------
+
+	# From west of the alcove to the east wall inside the snug, down the middle of the lane
+	# the alcove's, the bay's and the snug's gates all leave against the wall.
+	walker.state.position = Vector2(RoomContent.ALCOVE_X - RoomContent.ALCOVE_RADIUS - 60.0, lane_y)
+	walker.state.velocity = Vector2.ZERO
+	var drift := 0.0
+	var passed := {}
+	_begin_leg(world)
+
+	for _i in range(900):
+		_stride(world, Vector2.RIGHT)
+		drift = maxf(drift, absf(walker.position().y - lane_y))
+		if RoomContent.in_alcove(walker.position()):
+			passed["alcove"] = true
+		if RoomContent.in_bay(walker.position()):
+			passed["bay"] = true
+		if RoomContent.in_snug(walker.position()):
+			passed["snug"] = true
+		if walker.position().x >= RoomContent.SNUG_GATE_X:
+			break
+
+	_check(
+		passed.size() == 3 and drift < 0.5 and walker.position().x >= RoomContent.SNUG_GATE_X,
+		"one held direction walks the south wall through the alcove, the bay and into the snug (%s; %.1f off the line)"
+			% [", ".join(passed.keys()), drift]
+	)
+	_at_pace(
+		_leg("the south wall, the alcove to the snug", func(at: Vector2) -> bool:
+			return at.x >= RoomContent.SNUG_GATE_X),
+		"and walks it"
+	)
+
+	# --- Derived, and joined -----------------------------------------------------
+
+	# The two gates against the wall, and the two passages either side, each the door.
+	var alcove_end := RoomContent.alcove_screen()[0]
+	var widths := [
+		extent.y - RoomContent.BAY_GATE_Y - r,
+		west - r - alcove_end.x - alcove_end.z,
+		RoomContent.SNUG_X - RoomContent.SNUG_POST_RADIUS - east - r,
+	]
+	var gates := true
+	for width in widths:
+		gates = gates and absf(width - RoomContent.DOORWAY_SPAN) < 0.01
+	_check(
+		gates and is_equal_approx(alcove_end.y, RoomContent.BAY_GATE_Y),
+		"its gates and the passages either side are each the front door's width (%.1f, %.1f, %.1f), level with the alcove's end"
+			% widths
+	)
+
+	# The pillar is part of the front. The post under it overlaps it by the partition's
+	# twenty, and no other post of the bay leaves a gap to it that a walker could mistake
+	# for a way through: whatever does not overlap it is at least the door away.
+	var pillar := Vector2(RoomContent.PILLAR_AT.x, RoomContent.PILLAR_AT.y)
+	var under := RoomContent.bay_pillar_post()
+	var joined := r + RoomContent.PILLAR_RADIUS - under.distance_to(pillar)
+	_check(
+		absf(joined - RoomContent.GALLERY_OVERLAP) < 0.01,
+		"its front is joined to the south-east pillar, overlapping it by %.1f" % joined,
+		"stood clear of the pillar by the door, the bay could be 182 wide"
+	)
+
+	# Every neighbouring pair overlapping, so no hairline gap in any run.
+	var widest := 0.0
+	for index in range(1, screen.size()):
+		var a := Vector2(screen[index - 1].x, screen[index - 1].y)
+		var b := Vector2(screen[index].x, screen[index].y)
+		# Runs restart at a corner; a pair that is not neighbours is skipped.
+		if a.distance_to(b) < r * 2.0:
+			widest = maxf(widest, a.distance_to(b))
+
+	# And against everything else: nothing narrower than the front door, walls included.
+	# The pillar is left out, because it is joined; the check above is its.
+	var narrowest := INF
+	var where := ""
+	for piece in screen:
+		var at := Vector2(piece.x, piece.y)
+		for gap in [extent.y - at.y - piece.z]:
+			if gap < narrowest:
+				narrowest = gap
+				where = "(%.0f, %.0f) to the south wall" % [at.x, at.y]
+		for other in RoomContent.furniture():
+			if other in screen or Vector2(other.x, other.y) == pillar:
+				continue
+			var gap := at.distance_to(Vector2(other.x, other.y)) - piece.z - other.z
+			if gap < narrowest:
+				narrowest = gap
+				where = "(%.0f, %.0f) to (%.0f, %.0f)" % [at.x, at.y, other.x, other.y]
+
+	_check(
+		widest <= r * 2.0 - RoomContent.GALLERY_OVERLAP + 0.01
+			and narrowest >= RoomContent.DOORWAY_SPAN - 0.01,
+		"its posts overlap by at least %.0f (%.1f apart at most), and nothing about it is narrower than the front door (%.1f, %s)"
+			% [RoomContent.GALLERY_OVERLAP, widest, narrowest, where]
+	)
+
+	# Somewhere to stand out of the lane: the floor above it holds two people.
+	var above := extent.y - RoomContent.BAY_Y - r - RoomContent.DOORWAY_SPAN
+	_check(
+		above >= RoomContent.OCCUPANT_RADIUS * 4.0,
+		"above the lane along the wall it has %.0f of floor, two people's %.0f"
+			% [above, RoomContent.OCCUPANT_RADIUS * 4.0],
+		"a room that is only its lane is a corridor with a name"
+	)
+	_done()
+
+
 ## Who can hear whom, as the room decides it. See [method RoomContent.within_earshot].
 ##
 ## [b]Pure geometry, and the sandbox is where it meets the routers.[/b] This is the rule on
@@ -1235,6 +1466,28 @@ func _test_earshot() -> void:
 			and hears.call(in_booth, Vector2(860.0, -500.0)),
 		"inside the booth is out of earshot of the hall, and two people in it hear each other"
 	)
+
+	# Across the bay's front, and across its floor.
+	var in_bay := Vector2(300.0, RoomContent.ROOM_EXTENT.y - RoomContent.DOORWAY_SPAN - 40.0)
+	_check(
+		RoomContent.in_bay(in_bay)
+			and deaf.call(in_bay, Vector2(in_bay.x, 200.0))
+			and hears.call(in_bay, Vector2(RoomContent.bay_west_x() + 60.0, 520.0)),
+		"inside the bay is out of earshot of the hall, and two people in it hear each other"
+	)
+
+	# [b]The south wall is one line of sight.[/b] The alcove's, the bay's and the snug's
+	# gates all leave the same lane against the wall, so somebody in that lane in the bay
+	# hears somebody in it in the alcove and in the snug — which is the rule, not a leak:
+	# you hear whoever you could see. Stood out of the lane, above it, the bay is deaf to
+	# the alcove's floor above its lane: the end posts are in the way.
+	var lane := RoomContent.ROOM_EXTENT.y - RoomContent.DOORWAY_SPAN * 0.5
+	_check(
+		hears.call(Vector2(300.0, lane), Vector2(RoomContent.ALCOVE_X, lane))
+			and hears.call(Vector2(300.0, lane), Vector2(820.0, lane))
+			and deaf.call(in_bay, Vector2(RoomContent.ALCOVE_X, 420.0)),
+		"along the wall the bay hears the alcove and the snug through their gates, and out of the lane it does not"
+	)
 	_done()
 
 
@@ -1289,6 +1542,7 @@ func _test_reach() -> void:
 	var reached_snug := false
 	var reached_alcove := false
 	var reached_booth := false
+	var reached_bay := false
 	var head := 0
 
 	while head < queue.size():
@@ -1306,6 +1560,9 @@ func _test_reach() -> void:
 
 		if RoomContent.in_booth(inner.position + Vector2(column, row) * STEP):
 			reached_booth = true
+
+		if RoomContent.in_bay(inner.position + Vector2(column, row) * STEP):
+			reached_bay = true
 
 		for step in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
 			var c: int = column + step.x
@@ -1339,6 +1596,7 @@ func _test_reach() -> void:
 		"the flood from the hall gets into the snug"
 	)
 	_check(reached_alcove and reached_booth, "and into the alcove and the booth")
+	_check(reached_bay, "and into the bay")
 	_check(
 		reached == total,
 		"and every point a walker fits at is one it can get to (%d of %d%s)"

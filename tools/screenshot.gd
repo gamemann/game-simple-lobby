@@ -84,6 +84,13 @@ func _initialize() -> void:
 		RoomContent.ROOM_EXTENT.y - RoomContent.DOORWAY_SPAN - RoomContent.OCCUPANT_RADIUS - 8.0
 	)
 
+	# And one in the bay (2026-09-27), stood against its front above the lane along the
+	# wall: the two people's worth of floor its depth was checked to leave.
+	world.occupant_for(7).state.position = Vector2(
+		300.0,
+		RoomContent.BAY_Y + RoomContent.BAY_POST_RADIUS + RoomContent.OCCUPANT_RADIUS + 8.0
+	)
+
 	# Props, placed through the real spawner, because a placement drawn from a hand-built
 	# dictionary is a picture of a dictionary. This is the one place anybody looks at what
 	# a bench, a rug and a plant actually come out as — and the family's own record here
@@ -102,7 +109,8 @@ func _initialize() -> void:
 	props.place(2, &"crate", Vector2(-80.0, 250.0))
 	# The two that are not obstacles. A rug drawn at an obstacle's weight would be a rug
 	# people believe they have to walk around.
-	props.place(3, &"rug", Vector2(120.0, 300.0))
+	# At (120, 300) it lay across the bay's west corner, which drew as a rug under a wall.
+	props.place(3, &"rug", Vector2(250.0, 200.0))
 	# Inside the booth (2026-09-26): at (620, -420) it stood on the booth's west arm.
 	props.place(3, &"sign", Vector2(780.0, -450.0))
 

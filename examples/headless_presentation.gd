@@ -25,7 +25,7 @@ const RoomWorld := preload("../game/room_world.gd")
 
 const RoomVoice := preload("../game/client/room_voice.gd")
 
-const CHECKS := 101
+const CHECKS := 105
 
 var _passed := 0
 var _failed := 0
@@ -296,6 +296,34 @@ func _test_effects_respect_the_player() -> void:
 
 	p.present(0.016, Vector2.ZERO)
 	_check(p.fx.live_count() >= 0, "a frame advances without a renderer")
+
+	# [b]Drawn, not only decided.[/b] Until 2026-09-27 the ripple's scene did not exist,
+	# dot-fx refused it at DEBUG, and every check above passed: a tint needs no scene.
+	var missing := RoomPresentation.fx_catalogue().missing_scenes()
+	_check(
+		missing.is_empty(),
+		"every scene the effect catalogue names is present (missing: %s)" % ", ".join(missing)
+	)
+	var drawn := {}
+	p.fx.spawned.connect(func(id: StringName, node: Node, why: StringName) -> void:
+		drawn[id] = node if node != null else why
+	)
+	p.on_prop_placed(Vector2(-140, 60))
+	var ripple: Variant = drawn.get(&"prop_placed")
+	_check(
+		ripple is Node2D and (ripple as Node2D).global_position.is_equal_approx(Vector2(-140, 60)),
+		"putting something down draws a ripple where it went (%s)" % str(ripple)
+	)
+	_check(
+		ripple is Node and not (ripple as Node).find_children("*", "CPUParticles2D").is_empty(),
+		"and it is particles, not an empty node"
+	)
+	# The client builds this layer before the renderer, so at an equal z the floor is
+	# drawn over the ripple.
+	_check(
+		ripple is CanvasItem and (ripple as CanvasItem).z_index > 0,
+		"over the room, which is drawn after it at z 0"
+	)
 
 	p.queue_free()
 	_done()

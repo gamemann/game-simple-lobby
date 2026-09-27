@@ -1,6 +1,7 @@
 extends SceneTree
 
 const RoomContent := preload("../game/room_content.gd")
+const RoomPresentation := preload("../game/client/room_presentation.gd")
 const RoomProps := preload("../game/room_props.gd")
 const RoomWorld := preload("../game/room_world.gd")
 
@@ -32,6 +33,11 @@ var _framed := false
 ## blinded person's interface. Two frames, `room_beacon.png` and `room_blind.png`, instead
 ## of `room.png`.
 var _admin := false
+
+## `-- --fx`: the room close up round the bench, table and stool, a ripple going out from
+## each as the real [RoomPresentation] draws one when something is put down. One frame,
+## `room_fx.png`, instead of `room.png`.
+var _fx := false
 var _world: RoomWorld = null
 var _ui: Control = null
 
@@ -44,6 +50,7 @@ func _initialize() -> void:
 	DirAccess.make_dir_recursive_absolute(OUT_DIR)
 
 	_admin = "--admin" in OS.get_cmdline_user_args()
+	_fx = "--fx" in OS.get_cmdline_user_args()
 
 	var world := RoomWorld.new()
 	_world = world
@@ -183,6 +190,9 @@ func _process(_delta: float) -> bool:
 		_renderer.position = view * 0.5 - bounds.get_center() * fit
 		_framed = true
 
+		if _fx:
+			_ripples(view)
+
 		# Reset the wait, so the three frames are counted from AFTER the framing rather
 		# than from before it. Counting them first grabs a frame drawn at the old
 		# transform, which is the whole hazard the wait exists for.
@@ -194,7 +204,7 @@ func _process(_delta: float) -> bool:
 		return false
 
 	var image := root.get_texture().get_image()
-	var file := "room.png"
+	var file := "room_fx.png" if _fx else "room.png"
 
 	if _admin:
 		file = "room_beacon.png" if _stage == 0 else "room_blind.png"
@@ -211,6 +221,34 @@ func _process(_delta: float) -> bool:
 
 	_done = true
 	return false
+
+
+## Three ripples, close up. [b]Framed with the viewport's canvas transform rather than the
+## renderer's scale[/b]: an effect is a child of the presentation layer, which is a plain
+## [Node], so it is drawn in world coordinates by whatever transform the canvas has — the
+## client's camera, in a game — and a scale on the renderer alone would draw the ripples
+## at the wrong size in the wrong place.
+func _ripples(view: Vector2) -> void:
+	var focus := Vector2(-510.0, 60.0)
+	var zoom := 2.4
+	_renderer.scale = Vector2.ONE
+	_renderer.position = Vector2.ZERO
+	root.canvas_transform = Transform2D(0.0, Vector2.ONE * zoom, 0.0, view * 0.5 - focus * zoom)
+
+	var presentation := RoomPresentation.new()
+	presentation.name = "Presentation"
+	root.add_child(presentation)
+	presentation.setup()
+	presentation.present(0.016, focus)
+
+	for at in [Vector2(-620.0, -60.0), Vector2(-500.0, 120.0), Vector2(-420.0, 60.0)]:
+		presentation.present(0.016, focus)
+		presentation.on_prop_placed(at)
+
+	# Restarted, because a one-shot's first update ages it by the whole frame and this
+	# tool's frames are software-rendered.
+	for particles in presentation.fx.find_children("*", "CPUParticles2D", true, false):
+		(particles as CPUParticles2D).restart()
 
 
 ## Beacons on two people, placed before the first frame: one on open floor and one in the

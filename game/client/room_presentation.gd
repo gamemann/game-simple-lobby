@@ -396,6 +396,16 @@ func _build_fx() -> DotResult:
 	var res := fx.setup()
 	if not res.ok:
 		return res.wrap("the lobby's effects")
+
+	# [b]Said out loud, because a missing scene is otherwise a DEBUG line.[/b] Until
+	# 2026-09-27 the ripple's scene did not exist and every placement's ripple was refused
+	# for it with no suite noticing. `headless_presentation` asserts the list is empty;
+	# this is for a build that lost it anyway.
+	var missing := fx.catalogue.missing_scenes()
+	if not missing.is_empty():
+		DotLog.warn(CHANNEL, "effect scenes missing; those effects will not draw", {
+			"paths": ", ".join(missing),
+		})
 	return DotResult.success(null)
 
 

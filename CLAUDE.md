@@ -548,7 +548,7 @@ tools/check.sh                # every suite ci.yml names, after a parse pass
 | --- | --- | --- |
 | `headless_room` | 124 | the room alone. Membership, walls, every level walked by a held direction, a flood over the whole floor for sealed pockets, and two worlds replaying the same commands bit-identically |
 | `headless_stack` | 24 | the player layer: the collision layout, the two sides, the class as a choice nothing applies, and the ring of seats — filled past eight, because two arrivals cannot tell a seat chooser from a coin |
-| `headless_presentation` | 101 | settings, audio, effects, the console and the party — **none of which `headless_room` can reach**, because that one is `RoomWorld` alone and has no client in it |
+| `headless_presentation` | 105 | settings, audio, effects, the console and the party — **none of which `headless_room` can reach**, because that one is `RoomWorld` alone and has no client in it |
 | `headless_net` | 89 | every encoder against its decoder, then a session over a lossy delaying loopback, then a walk into the furniture, and a gag that reaches the offline chat |
 | `dedicated` | 143 | a real `DotServer`, a real module, a real WebSocket listener, and the props, chat, voice, moderation and identity halves — and a game change under the loaded module, to another room, to a game that is not one, and back |
 | `sandbox` | 83 | **a real server and two real clients, over real sockets, in one process** — chat, props and voice all cross a wire here and nowhere else, and a newcomer is welcomed exactly once |
@@ -609,6 +609,7 @@ the total at the bottom cannot reveal a check that never ran.
 ```bash
 tools/screenshot.sh          # -> screenshots/room.png, gitignored
 tools/screenshot.sh --admin  # -> room_beacon.png and room_blind.png: two beacons, then the room through a blind
+tools/screenshot.sh --fx     # -> room_fx.png: a ripple from each of three placements, close up, through the real presentation
 tools/screenshot_menus.sh    # -> screenshots/menu_*.png, the pause and settings screens
 ```
 
@@ -676,6 +677,10 @@ And the line every game with a console forgets: `_unhandled_input` returns early
 `presentation.swallows_input()`. This game turns letters into shortcuts, so without it
 typing `settings` into the console cycles the chat channel four times and opens the chat
 box.
+
+### The ripple's scene, which did not exist until 2026-09-27
+
+`fx_catalogue()` named `scenes/fx/place_ripple.tscn` for a placement and the file was never written, and dot-fx refuses a missing scene at DEBUG, so no placement ever rippled while `headless_presentation` passed on the whisper's tint, which needs no scene. It is a script-free `CPUParticles2D` now: twenty-eight soft dots on a circle, pushed outward by radial acceleration into a ring that fades in 0.6 s. **At `z_index` 5, because the client builds this layer before the renderer**, so at an equal z the floor is drawn over it. `_build_fx` warns when a scene is missing, as mg-buses-from-hell's `BfhFx.setup` does. The effects section asserts `missing_scenes()` is empty and that a placement puts particles where it happened and over the room (4 checks; armed: the scene removed fired 4, the `z_index` removed 1). `tools/screenshot.sh --fx` frames it with the viewport's canvas transform rather than the renderer's scale, because an effect is drawn in world coordinates under a plain `Node` and a scaled renderer alone would put the ripples beside the furniture they belong to.
 
 ## Escape opens a menu, which it did not
 

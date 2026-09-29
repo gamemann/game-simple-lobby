@@ -224,6 +224,13 @@ static func _build_furniture() -> PackedVector3Array:
 	# so every piece before it resolves in the order it always did.
 	out.append_array(bay_screen())
 
+	# --- The landing off the north-west corner -------------------------------
+	#
+	# A front joined to the partition's north post and the north-west pillar, with a door
+	# against the gallery's west end. See [constant LANDING_POST_RADIUS]. Last, for the
+	# bay's reason.
+	out.append_array(landing_screen())
+
 	return out
 
 
@@ -753,6 +760,90 @@ static func in_bay(at: Vector2) -> bool:
 	return at.x > bay_west_x() and at.x < BAY_EAST_X and at.y > BAY_Y
 
 
+# --- The landing -------------------------------------------------------------
+
+## The landing's posts: the bay's, for the bay's reason.
+##
+## [b]Added 2026-09-29: the room the wing's north gate lets out onto.[/b] The north-west
+## corner of the hall, between the partition, the north-west pillar and the gallery's west
+## end, was the last open floor off the hall with nothing to say what it was, and it had a
+## slot in it: the partition's north post and the north-west pillar stood 47.6 apart,
+## face to face, which is a walker's 44 and 3.6 to spare. A way through only somebody
+## aiming at it fits, and it read as a gap in every picture. The landing closes it.
+##
+## It is built the way the bay is, out of what is already standing: a front run from a
+## post joined to the partition's north post, through a post over the pillar, to a doorpost
+## the front door's width short of the gallery's west end. So the gallery's west end is the
+## landing's doorpost, the way the north pillars are the gallery's, and the strip behind
+## the gallery runs on west into it. What that makes is the north wall's walk: out of the
+## wing by its north gate, across the landing and along the gallery, one held direction.
+const LANDING_POST_RADIUS := 30.0
+
+
+## The front's post over the north-west pillar, joined to it by [constant GALLERY_OVERLAP]
+## (the bay's post under the south-east one, mirrored). The pillar is not a wall for
+## [method within_earshot]; this post is what closes that corner for a voice.
+static func landing_pillar_post() -> Vector2:
+	return Vector2(
+		-PILLAR_AT.x,
+		-PILLAR_AT.y - (PILLAR_RADIUS + LANDING_POST_RADIUS - GALLERY_OVERLAP)
+	)
+
+
+## The front's west end: a post joined to the partition's north post by
+## [constant GALLERY_OVERLAP], on the line from that post's centre to
+## [method landing_pillar_post]. Derived from both, so moving the pillar or the north gate
+## moves the joint with it rather than reopening the slot.
+static func landing_joint_post() -> Vector2:
+	var north := Vector2(WALL_X, NORTH_GATE_Y)
+	return north + (landing_pillar_post() - north).normalized() * (
+		POST_RADIUS + LANDING_POST_RADIUS - GALLERY_OVERLAP
+	)
+
+
+## The doorpost: on [constant GALLERY_Y], its face exactly [constant DOORWAY_SPAN] from the
+## face of the gallery's west end post. The door is between the two.
+static func landing_door_post() -> Vector2:
+	var gallery_west := -float(GALLERY_POSTS - 1) * 0.5 * gallery_spacing()
+	return Vector2(
+		gallery_west - GALLERY_POST_RADIUS - DOORWAY_SPAN - LANDING_POST_RADIUS, GALLERY_Y
+	)
+
+
+## The middle of the landing's door, on [constant GALLERY_Y].
+static func landing_door() -> Vector2:
+	var gallery_west := -float(GALLERY_POSTS - 1) * 0.5 * gallery_spacing() - GALLERY_POST_RADIUS
+	return Vector2(
+		(landing_door_post().x + LANDING_POST_RADIUS + gallery_west) * 0.5, GALLERY_Y
+	)
+
+
+## The landing's front: the joint on the partition, the post over the pillar, the doorpost,
+## each run spaced evenly between two placed posts no more than the overlap apart
+## ([method _bay_run], whose posts are this front's radius).
+##
+## Separate from [method furniture] for [method gallery_screen]'s reason. Neither the
+## partition's post nor the pillar is in it: they are already standing, and the landing is
+## joined to them.
+static func landing_screen() -> PackedVector3Array:
+	var out := PackedVector3Array()
+	var over := landing_pillar_post()
+
+	_bay_run(out, landing_joint_post(), over, true)
+	_bay_run(out, over, landing_door_post(), false)
+	return out
+
+
+## Whether [param at] is on the landing: east of the partition, west of the gallery's
+## west end, and north of the front's face.
+static func in_landing(at: Vector2) -> bool:
+	var gallery_west := -float(GALLERY_POSTS - 1) * 0.5 * gallery_spacing() - GALLERY_POST_RADIUS
+	return (
+		at.x > WALL_X and at.x < gallery_west
+		and at.y < landing_pillar_post().y - LANDING_POST_RADIUS
+	)
+
+
 ## Whether [param at] is in the wing behind the partition rather than in the hall.
 ##
 ## [b]Read from the same constant the posts are placed from.[/b] A check that wrote
@@ -764,7 +855,7 @@ static func in_wing(at: Vector2) -> bool:
 # --- Earshot ------------------------------------------------------------------
 
 ## What stops a voice: the partition, the gallery's screen, the snug's L, the alcove's
-## bow, the booth's L and the bay's three sides. Everything else in [method furniture] is
+## bow, the booth's L, the bay's three sides and the landing's front. Everything else in [method furniture] is
 ## not a wall and is not here — the south-east pillar included, although the bay's front
 ## is joined to it: the front's post under the pillar is what closes that corner.
 ##
@@ -789,6 +880,7 @@ static func _build_walls() -> PackedVector3Array:
 	out.append_array(alcove_screen())
 	out.append_array(booth_screen())
 	out.append_array(bay_screen())
+	out.append_array(landing_screen())
 	return out
 
 

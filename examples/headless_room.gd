@@ -13,7 +13,7 @@ const RoomWorld := preload("../game/room_world.gd")
 ## Exits non-zero on any failure. No netcode, no server, no rendering — this is
 ## [RoomWorld] alone, which is the only part of the game that decides anything.
 
-const CHECKS := 124
+const CHECKS := 137
 
 var _passed := 0
 var _failed := 0
@@ -73,6 +73,7 @@ func _run() -> void:
 	_test_alcove()
 	_test_booth()
 	_test_bay()
+	_test_landing()
 	_test_earshot()
 	_test_reach()
 	_test_determinism()
@@ -627,7 +628,8 @@ func _test_gallery() -> void:
 	# [b]Nothing steers.[/b] Due north to the wall, then due east until the far side —
 	# two held directions, which is what makes this a statement about the room rather
 	# than about the path somebody found through it.
-	occupant.state.position = Vector2(-350.0, -180.0)
+	# Through the landing's door since 2026-09-29: the west mouth is its door now.
+	occupant.state.position = Vector2(RoomContent.landing_door().x, -180.0)
 	occupant.state.velocity = Vector2.ZERO
 	_begin_leg(world)
 
@@ -1398,6 +1400,213 @@ func _test_bay() -> void:
 	_done()
 
 
+## The landing: the north-west corner of the hall, closed off by a front joined to the
+## partition's north post and the north-west pillar, with its door against the gallery's
+## west end. See [constant RoomContent.LANDING_POST_RADIUS].
+##
+## [b]Driven as the north wall's walk it makes[/b]: in from the hall by its door, west along
+## the wall and out through the wing's north gate, back east across it into the gallery,
+## and out of the door again. Four held directions, nothing steering, every leg timed. Then
+## the slot it closed, walked into from the side that used to lead through it.
+func _test_landing() -> void:
+	_section("the landing in the north-west corner")
+
+	var world := _world(&"landing")
+	world.add_occupant(1, "Stroller")
+	var walker := world.occupant_for(1)
+	var screen := RoomContent.landing_screen()
+	var door := RoomContent.landing_door()
+	var r := RoomContent.LANDING_POST_RADIUS
+	var extent := RoomContent.ROOM_EXTENT
+	var wall_lane := -extent.y + RoomContent.OCCUPANT_RADIUS + 1.0
+
+	# --- In by the door, north, touching nothing --------------------------------------
+
+	walker.state.position = Vector2(door.x, -180.0)
+	walker.state.velocity = Vector2.ZERO
+	var drift := 0.0
+	_begin_leg(world)
+
+	for _i in range(600):
+		_stride(world, Vector2.UP)
+		drift = maxf(drift, absf(walker.position().x - door.x))
+		if walker.position().y <= wall_lane:
+			break
+
+	_check(
+		RoomContent.in_landing(walker.position()) and drift < 0.5,
+		"holding north through the landing's door reaches the north wall touching nothing (%.1f off the line)"
+			% drift
+	)
+	_at_pace(
+		_leg("hall to the north wall through the landing's door", func(at: Vector2) -> bool:
+			return at.y <= wall_lane),
+		"and walks it"
+	)
+
+	# --- West along the wall, out through the wing's north gate -------------------------
+
+	var along := walker.position().y
+	drift = 0.0
+	_begin_leg(world)
+
+	for _i in range(600):
+		_stride(world, Vector2.LEFT)
+		drift = maxf(drift, absf(walker.position().y - along))
+		if walker.position().x < RoomContent.WALL_X - 100.0:
+			break
+
+	_check(
+		RoomContent.in_wing(walker.position()) and drift < 0.5,
+		"holding west along the north wall leaves the landing by the wing's north gate (%.1f off the line)"
+			% drift,
+		"the gate is the partition's second way through, and the landing is what it opens onto"
+	)
+	_at_pace(
+		_leg("the landing, west into the wing", func(at: Vector2) -> bool:
+			return at.x < RoomContent.WALL_X - 100.0),
+		"and walks it"
+	)
+
+	# --- And back east, across it and into the gallery ----------------------------------
+
+	drift = 0.0
+	var crossed := false
+	_begin_leg(world)
+
+	for _i in range(600):
+		_stride(world, Vector2.RIGHT)
+		drift = maxf(drift, absf(walker.position().y - along))
+		crossed = crossed or RoomContent.in_landing(walker.position())
+		if RoomContent.in_gallery(walker.position()):
+			break
+
+	_check(
+		crossed and RoomContent.in_gallery(walker.position()) and drift < 0.5,
+		"holding east from the wing crosses the landing into the gallery behind its screen (%.1f off the line)"
+			% drift,
+		"the north wall is one walk: the wing's gate, the landing, the gallery"
+	)
+	_at_pace(
+		_leg("the wing, across the landing into the gallery", func(at: Vector2) -> bool:
+			return RoomContent.in_gallery(at)),
+		"and walks it"
+	)
+
+	# --- Out of the door, south -------------------------------------------------------
+
+	walker.state.position = Vector2(door.x, -480.0)
+	walker.state.velocity = Vector2.ZERO
+	drift = 0.0
+	_begin_leg(world)
+
+	for _i in range(600):
+		_stride(world, Vector2.DOWN)
+		drift = maxf(drift, absf(walker.position().x - door.x))
+		if walker.position().y > RoomContent.GALLERY_Y + 150.0:
+			break
+
+	_check(
+		walker.position().y > RoomContent.GALLERY_Y + 150.0 and drift < 0.5,
+		"holding south from the landing goes out of its door into the hall (%.1f off the line)" % drift
+	)
+	_at_pace(
+		_leg("the landing, out of its door", func(at: Vector2) -> bool:
+			return at.y > RoomContent.GALLERY_Y + 150.0),
+		"and walks it"
+	)
+
+	# --- Its front is a wall, and the slot is shut --------------------------------------
+
+	# From the hall at a front post, head on; from inside at the joint on the partition;
+	# and into the slot that stood between the partition's north post and the pillar,
+	# along its own axis from the landing's side, which is the one line that used to go
+	# through it with 3.6 to spare.
+	var north := Vector2(RoomContent.WALL_X, RoomContent.NORTH_GATE_Y)
+	var pillar := Vector2(-RoomContent.PILLAR_AT.x, -RoomContent.PILLAR_AT.y)
+	var across := (pillar - north).normalized()
+	var saddle := north + across * (
+		RoomContent.POST_RADIUS
+		+ (north.distance_to(pillar) - RoomContent.POST_RADIUS - RoomContent.PILLAR_RADIUS) * 0.5
+	)
+	var into := Vector2(-across.y, across.x)
+	var joint := RoomContent.landing_joint_post()
+	var over := RoomContent.landing_pillar_post()
+	var held := 0
+
+	for probe in [
+		[Vector2((over.x + RoomContent.landing_door_post().x) * 0.5, -200.0), Vector2.UP, false],
+		[Vector2((joint.x + over.x) * 0.5, -480.0), Vector2.DOWN, true],
+		[saddle - into * 120.0, into, true],
+	]:
+		walker.state.position = probe[0]
+		walker.state.velocity = Vector2.ZERO
+		for _i in range(600):
+			world.tick({1: _walk(probe[1])})
+		if RoomContent.in_landing(walker.position()) == probe[2]:
+			held += 1
+
+	_check(
+		held == 3,
+		"walking into its front from the hall, or into its joint or the old slot from inside, does not go through (%d of 3 held)"
+			% held,
+		"47.6 between the partition's north post and the pillar was a walker and 3.6"
+	)
+
+	# --- Measured -----------------------------------------------------------------------
+
+	var gallery_west := RoomContent.gallery_screen()[0]
+	var doorpost := RoomContent.landing_door_post()
+	var width := doorpost.distance_to(Vector2(gallery_west.x, gallery_west.y)) - r - gallery_west.z
+	# Measured off the posts that are standing, not off the functions that place them: the
+	# post nearest each thing it is joined to has to overlap it by the partition's twenty.
+	var on_partition := -INF
+	var on_pillar := -INF
+	for piece in screen:
+		var at := Vector2(piece.x, piece.y)
+		on_partition = maxf(on_partition, RoomContent.POST_RADIUS + piece.z - at.distance_to(north))
+		on_pillar = maxf(on_pillar, RoomContent.PILLAR_RADIUS + piece.z - at.distance_to(pillar))
+	_check(
+		absf(width - RoomContent.DOORWAY_SPAN) < 0.01
+			and absf(on_partition - RoomContent.GALLERY_OVERLAP) < 0.01
+			and absf(on_pillar - RoomContent.GALLERY_OVERLAP) < 0.01,
+		"its door is the front door's width (%.1f), and it is joined to the partition (%.1f) and the pillar (%.1f)"
+			% [width, on_partition, on_pillar]
+	)
+
+	var widest := 0.0
+	var shallowest := INF
+	for index in range(screen.size()):
+		var at := Vector2(screen[index].x, screen[index].y)
+		shallowest = minf(shallowest, at.y - r + extent.y)
+		if index > 0:
+			widest = maxf(widest, at.distance_to(Vector2(screen[index - 1].x, screen[index - 1].y)))
+
+	# Everything it is not joined to: nothing narrower than the front door. The partition and
+	# the pillar are left out, because it is joined to both; the check above is theirs.
+	var narrowest := INF
+	var where := ""
+	for piece in screen:
+		var at := Vector2(piece.x, piece.y)
+		for other in RoomContent.furniture():
+			var there := Vector2(other.x, other.y)
+			if other in screen or other in RoomContent.partition() or there == pillar:
+				continue
+			var gap := at.distance_to(there) - piece.z - other.z
+			if gap < narrowest:
+				narrowest = gap
+				where = "(%.0f, %.0f) to (%.0f, %.0f)" % [at.x, at.y, there.x, there.y]
+
+	_check(
+		widest <= r * 2.0 - RoomContent.GALLERY_OVERLAP + 0.01
+			and narrowest >= RoomContent.DOORWAY_SPAN - 0.01
+			and shallowest >= RoomContent.GALLERY_DEPTH,
+		"its posts overlap by at least %.0f (%.1f apart at most), nothing about it is narrower than the front door (%.1f, %s), and it is as deep as the gallery everywhere (%.0f of %.0f)"
+			% [RoomContent.GALLERY_OVERLAP, widest, narrowest, where, shallowest, RoomContent.GALLERY_DEPTH]
+	)
+	_done()
+
+
 ## Who can hear whom, as the room decides it. See [method RoomContent.within_earshot].
 ##
 ## [b]Pure geometry, and the sandbox is where it meets the routers.[/b] This is the rule on
@@ -1488,6 +1697,18 @@ func _test_earshot() -> void:
 			and deaf.call(in_bay, Vector2(RoomContent.ALCOVE_X, 420.0)),
 		"along the wall the bay hears the alcove and the snug through their gates, and out of the lane it does not"
 	)
+
+	# Across the landing's front, through where the slot was, across its floor, and along
+	# the north wall into the wing through the gate it opens onto.
+	var in_landing := Vector2(-450.0, -470.0)
+	_check(
+		RoomContent.in_landing(in_landing)
+			and deaf.call(in_landing, Vector2(-420.0, -200.0))
+			and deaf.call(Vector2(-500.0, -420.0), Vector2(-470.0, -180.0))
+			and hears.call(in_landing, Vector2(-330.0, -520.0))
+			and hears.call(Vector2(-450.0, -520.0), Vector2(-770.0, -520.0)),
+		"inside the landing is out of earshot of the hall, through its front and the old slot, and hears its own floor and the wing's gate"
+	)
 	_done()
 
 
@@ -1543,6 +1764,7 @@ func _test_reach() -> void:
 	var reached_alcove := false
 	var reached_booth := false
 	var reached_bay := false
+	var reached_landing := false
 	var head := 0
 
 	while head < queue.size():
@@ -1563,6 +1785,9 @@ func _test_reach() -> void:
 
 		if RoomContent.in_bay(inner.position + Vector2(column, row) * STEP):
 			reached_bay = true
+
+		if RoomContent.in_landing(inner.position + Vector2(column, row) * STEP):
+			reached_landing = true
 
 		for step in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
 			var c: int = column + step.x
@@ -1597,6 +1822,7 @@ func _test_reach() -> void:
 	)
 	_check(reached_alcove and reached_booth, "and into the alcove and the booth")
 	_check(reached_bay, "and into the bay")
+	_check(reached_landing, "and onto the landing")
 	_check(
 		reached == total,
 		"and every point a walker fits at is one it can get to (%d of %d%s)"

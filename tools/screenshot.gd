@@ -98,6 +98,10 @@ func _initialize() -> void:
 		RoomContent.BAY_Y + RoomContent.BAY_POST_RADIUS + RoomContent.OCCUPANT_RADIUS + 8.0
 	)
 
+	# And one on the landing (2026-09-29), out of the north wall's lane, between the wing's
+	# gate and the landing's door: the floor its front was checked to leave.
+	world.occupant_for(8).state.position = Vector2(-460.0, -420.0)
+
 	# Props, placed through the real spawner, because a placement drawn from a hand-built
 	# dictionary is a picture of a dictionary. This is the one place anybody looks at what
 	# a bench, a rug and a plant actually come out as — and the family's own record here

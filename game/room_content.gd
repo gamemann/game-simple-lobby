@@ -152,9 +152,10 @@ static func _build_furniture() -> PackedVector3Array:
 		Vector3(-PILLAR_AT.x, PILLAR_AT.y, PILLAR_RADIUS),
 		Vector3(PILLAR_AT.x, PILLAR_AT.y, PILLAR_RADIUS),
 
-		# Two benches by the east wall, far enough apart to stand between.
-		Vector3(700.0, -110.0, 60.0),
-		Vector3(700.0, 110.0, 60.0),
+		# Two benches by the east wall, far enough apart to stand between. Named since
+		# the aisle (2026-09-30), whose door they are: see [constant BENCH_AT].
+		Vector3(BENCH_AT.x, -BENCH_AT.y, BENCH_RADIUS),
+		Vector3(BENCH_AT.x, BENCH_AT.y, BENCH_RADIUS),
 
 		# --- The partition, and the wing behind it ---------------------------
 		#
@@ -230,6 +231,12 @@ static func _build_furniture() -> PackedVector3Array:
 	# against the gallery's west end. See [constant LANDING_POST_RADIUS]. Last, for the
 	# bay's reason.
 	out.append_array(landing_screen())
+
+	# --- The aisle along the east wall ---------------------------------------
+	#
+	# A front from the booth's corner to the snug's, with the two benches set into it as
+	# its door. See [constant BENCH_AT]. Last, for the bay's reason.
+	out.append_array(aisle_screen())
 
 	return out
 
@@ -852,10 +859,88 @@ static func in_wing(at: Vector2) -> bool:
 	return at.x < WALL_X
 
 
+# --- The aisle ----------------------------------------------------------------
+
+## The south bench; the north one is its mirror. At the values they always had.
+##
+## [b]Named 2026-09-30, because they are the aisle's door.[/b] Their faces are 100 apart,
+## exactly [constant DOORWAY_SPAN]: "far enough apart to stand between" was the front
+## door's width from the day they were placed, and the aisle is what that gap opens onto.
+##
+## [b]The aisle is the east wall's strip, closed off.[/b] East of the benches, between the
+## booth's south arm and the snug's north arm, was the last floor off the hall that nothing
+## said anything about: 140 to 200 wide, with the booth's door opening onto it from the
+## north and the snug's east gate from the south, and from the hall it was open along its
+## whole length. It is a room now, built the landing's way out of what is already standing:
+## a run of posts from the booth's corner post to a post backing the north bench, the
+## benches' gap as the door, and a run from a post backing the south bench to the snug's
+## corner post. Two rooms that each had a door onto open floor now open onto one corridor,
+## so the east wall is one walk: out of the booth, along the aisle, into the snug.
+const BENCH_AT := Vector2(700.0, 110.0)
+const BENCH_RADIUS := 60.0
+
+## The aisle's posts: [method _bay_run]'s, which are this radius.
+const AISLE_POST_RADIUS := 30.0
+
+## The line the two posts backing the benches stand on: the front door's width off the east
+## wall, so the lane behind each bench is a door ([constant SNUG_GATE_X]'s derivation, and
+## the same number: the lane behind the benches runs straight on into the snug's east
+## gate). At these numbers each backing post overlaps its bench by exactly
+## [constant GALLERY_OVERLAP]; the two derivations agree, and the suite asserts it.
+const AISLE_BACK_X := ROOM_EXTENT.x - DOORWAY_SPAN - AISLE_POST_RADIUS
+
+
+## The post backing the north bench ([param north]) or the south one. It is what closes
+## the bench for a voice: a bench is furniture and not a wall, and this post is.
+static func aisle_back_post(north: bool) -> Vector2:
+	return Vector2(AISLE_BACK_X, -BENCH_AT.y if north else BENCH_AT.y)
+
+
+## The middle of the aisle's door, between the benches.
+static func aisle_door() -> Vector2:
+	return Vector2(BENCH_AT.x, 0.0)
+
+
+## The aisle's front: from the booth's corner post (standing already, so not included) to
+## the north backing post, then from the south backing post to the snug's corner post (the
+## same), each run spaced evenly no more than the overlap apart. The run toward the snug
+## is laid from the snug's end so that [method _bay_run] leaves that end out.
+##
+## Separate from [method furniture] for [method gallery_screen]'s reason. The benches are
+## not in it: they are furniture, and the backing posts are what make them part of a wall.
+static func aisle_screen() -> PackedVector3Array:
+	var out := PackedVector3Array()
+	_bay_run(out, Vector2(BOOTH_X, BOOTH_Y), aisle_back_post(true), false)
+	_bay_run(out, Vector2(SNUG_X, SNUG_Y), aisle_back_post(false), false)
+	return out
+
+
+## Where the aisle's front stands at [param y]: the run from the booth's corner, the
+## backing posts' line across the door, and the run to the snug's corner.
+static func aisle_front_x(y: float) -> float:
+	var north := aisle_back_post(true)
+	var south := aisle_back_post(false)
+
+	if y < north.y:
+		return lerpf(BOOTH_X, north.x, inverse_lerp(BOOTH_Y, north.y, y))
+
+	if y > south.y:
+		return lerpf(south.x, SNUG_X, inverse_lerp(south.y, SNUG_Y, y))
+
+	return AISLE_BACK_X
+
+
+## Whether [param at] is in the aisle: between the booth's south arm and the snug's north
+## arm, and east of the front's line. Disjoint from [method in_booth] and
+## [method in_snug], which begin on those arms' lines.
+static func in_aisle(at: Vector2) -> bool:
+	return at.y > BOOTH_Y and at.y < SNUG_Y and at.x > aisle_front_x(at.y)
+
+
 # --- Earshot ------------------------------------------------------------------
 
 ## What stops a voice: the partition, the gallery's screen, the snug's L, the alcove's
-## bow, the booth's L, the bay's three sides and the landing's front. Everything else in [method furniture] is
+## bow, the booth's L, the bay's three sides, the landing's front and the aisle's. Everything else in [method furniture] is
 ## not a wall and is not here — the south-east pillar included, although the bay's front
 ## is joined to it: the front's post under the pillar is what closes that corner.
 ##
@@ -881,6 +966,7 @@ static func _build_walls() -> PackedVector3Array:
 	out.append_array(booth_screen())
 	out.append_array(bay_screen())
 	out.append_array(landing_screen())
+	out.append_array(aisle_screen())
 	return out
 
 

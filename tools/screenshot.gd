@@ -102,6 +102,10 @@ func _initialize() -> void:
 	# gate and the landing's door: the floor its front was checked to leave.
 	world.occupant_for(8).state.position = Vector2(-460.0, -420.0)
 
+	# And one in the aisle (2026-09-30), behind its north run, halfway between the booth's
+	# door and the bench: the widest floor the aisle has.
+	world.occupant_for(1).state.position = Vector2(820.0, -210.0)
+
 	# Props, placed through the real spawner, because a placement drawn from a hand-built
 	# dictionary is a picture of a dictionary. This is the one place anybody looks at what
 	# a bench, a rug and a plant actually come out as — and the family's own record here

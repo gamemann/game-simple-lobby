@@ -13,7 +13,7 @@ const RoomWorld := preload("../game/room_world.gd")
 ## Exits non-zero on any failure. No netcode, no server, no rendering — this is
 ## [RoomWorld] alone, which is the only part of the game that decides anything.
 
-const CHECKS := 137
+const CHECKS := 152
 
 var _passed := 0
 var _failed := 0
@@ -74,6 +74,7 @@ func _run() -> void:
 	_test_booth()
 	_test_bay()
 	_test_landing()
+	_test_aisle()
 	_test_earshot()
 	_test_reach()
 	_test_determinism()
@@ -926,8 +927,10 @@ func _test_snug() -> void:
 				narrowest = gap
 				where = "(%.0f, %.0f) to a wall" % [at.x, at.y]
 
+		# The aisle's front is joined to the corner post (2026-09-30); its own section
+		# measures that joint.
 		for other in RoomContent.furniture():
-			if other in mine:
+			if other in mine or other in RoomContent.aisle_screen():
 				continue
 
 			var gap := at.distance_to(Vector2(other.x, other.y)) - piece.z - other.z
@@ -1080,9 +1083,11 @@ func _test_booth() -> void:
 	var walker := world.occupant_for(1)
 	var door := RoomContent.booth_door()
 
-	# In through the doorway on one held direction, touching nothing, and out again.
+	# In through the doorway on one held direction, touching nothing, and out again. The
+	# walk in starts 100 south of the door rather than 200 since the aisle (2026-09-30):
+	# the door opens onto the aisle now, and 200 south is the post backing the north bench.
 	for way in [Vector2.UP, Vector2.DOWN]:
-		var from := door + Vector2(0.0, 200.0 if way == Vector2.UP else -150.0)
+		var from := door + Vector2(0.0, 100.0 if way == Vector2.UP else -150.0)
 		walker.state.position = from
 		walker.state.velocity = Vector2.ZERO
 		var drift := 0.0
@@ -1115,7 +1120,9 @@ func _test_booth() -> void:
 	for probe in [
 		# At a post's centre, head on: aimed between two it slides along the arm into
 		# the doorway, which is the doorway working.
-		[Vector2(RoomContent.BOOTH_X + RoomContent.BOOTH_SPACING, -230.0), Vector2.UP, "south arm"],
+		# The east end post since the aisle (2026-09-30): the aisle's north run stands
+		# across the approach to the west one.
+		[Vector2(RoomContent.BOOTH_X + RoomContent.BOOTH_SPACING * 5.0, -230.0), Vector2.UP, "south arm"],
 		[Vector2(RoomContent.BOOTH_X - 150.0, -450.0), Vector2.RIGHT, "west arm"],
 	]:
 		walker.state.position = probe[0]
@@ -1139,8 +1146,10 @@ func _test_booth() -> void:
 	for piece in screen:
 		var at := Vector2(piece.x, piece.y)
 
+		# The aisle's front is joined to the corner post (2026-09-30); its own section
+		# measures that joint.
 		for other in RoomContent.furniture():
-			if other in screen:
+			if other in screen or other in RoomContent.aisle_screen():
 				continue
 			var gap := at.distance_to(Vector2(other.x, other.y)) - piece.z - other.z
 			if gap < narrowest:
@@ -1607,6 +1616,262 @@ func _test_landing() -> void:
 	_done()
 
 
+## The aisle along the east wall: the benches as its door, the booth at one end and the
+## snug at the other. See [constant RoomContent.BENCH_AT].
+func _test_aisle() -> void:
+	_section("the aisle along the east wall")
+
+	var world := _world(&"aisle")
+	world.add_occupant(1, "Pacer")
+	var walker := world.occupant_for(1)
+	var screen := RoomContent.aisle_screen()
+	var door := RoomContent.aisle_door()
+	var bench := RoomContent.BENCH_AT
+	var r := RoomContent.AISLE_POST_RADIUS
+	var extent := RoomContent.ROOM_EXTENT
+	var lane := extent.x - RoomContent.OCCUPANT_RADIUS - 1.0
+	var outside := bench.x - RoomContent.BENCH_RADIUS - RoomContent.OCCUPANT_RADIUS - 40.0
+
+	# --- In between the benches, east to the wall -------------------------------------
+
+	walker.state.position = Vector2(480.0, door.y)
+	walker.state.velocity = Vector2.ZERO
+	var drift := 0.0
+	var nearest := INF
+	_begin_leg(world)
+
+	for _i in range(600):
+		_stride(world, Vector2.RIGHT)
+		drift = maxf(drift, absf(walker.position().y - door.y))
+		for side in [-1.0, 1.0]:
+			nearest = minf(nearest, walker.position().distance_to(Vector2(bench.x, bench.y * side))
+				- RoomContent.BENCH_RADIUS - walker.state.radius)
+		if walker.position().x >= lane:
+			break
+
+	_check(
+		RoomContent.in_aisle(walker.position()) and drift < 0.5 and nearest > 20.0,
+		"holding east between the benches reaches the east wall inside the aisle touching nothing (%.1f off the line, %.1f clear of each bench)"
+			% [drift, nearest],
+		"the benches were the front door's width apart from the day they were placed; that gap is the aisle's door"
+	)
+	_at_pace(
+		_leg("the hall, between the benches into the aisle", func(at: Vector2) -> bool:
+			return at.x >= lane),
+		"and walks it"
+	)
+
+	# --- South along the wall, behind the south bench and into the snug ---------------
+
+	var along := walker.position().x
+	drift = 0.0
+	var behind := false
+	_begin_leg(world)
+
+	for _i in range(600):
+		_stride(world, Vector2.DOWN)
+		drift = maxf(drift, absf(walker.position().x - along))
+		behind = behind or (
+			RoomContent.in_aisle(walker.position()) and walker.position().y >= bench.y
+		)
+		if RoomContent.in_snug(walker.position()) and walker.position().y > RoomContent.SNUG_GATE_Y:
+			break
+
+	_check(
+		behind and RoomContent.in_snug(walker.position()) and drift < 0.5,
+		"holding south along the wall passes behind the south bench and comes into the snug by its east gate (%.1f off the line)"
+			% drift,
+		"the lane behind a bench is the front door's width, and it runs straight on into the snug's gate"
+	)
+	_at_pace(
+		_leg("the aisle, south into the snug", func(at: Vector2) -> bool:
+			return RoomContent.in_snug(at) and at.y > RoomContent.SNUG_GATE_Y),
+		"and walks it"
+	)
+
+	# --- And back north the whole length, to the booth's arm ---------------------------
+
+	var booth_arm := RoomContent.BOOTH_Y + RoomContent.BOOTH_POST_RADIUS + RoomContent.OCCUPANT_RADIUS + 1.0
+	drift = 0.0
+	var passed := 0
+	_begin_leg(world)
+
+	for _i in range(900):
+		_stride(world, Vector2.UP)
+		drift = maxf(drift, absf(walker.position().x - along))
+		if passed == 0 and RoomContent.in_aisle(walker.position()) and walker.position().y < bench.y:
+			passed = 1
+		if passed == 1 and walker.position().y < -bench.y:
+			passed = 2
+		if walker.position().y <= booth_arm:
+			break
+
+	_check(
+		passed == 2 and RoomContent.in_aisle(walker.position()) and drift < 0.5,
+		"holding north from the snug walks the aisle's length behind both benches to the booth's arm (%.1f off the line)"
+			% drift,
+		"the east wall is one walk: the snug's gate, the aisle, the booth's door"
+	)
+	_at_pace(
+		_leg("the snug, north up the aisle to the booth", func(at: Vector2) -> bool:
+			return at.y <= booth_arm),
+		"and walks it"
+	)
+
+	# --- Out of the booth's door into it ----------------------------------------------
+
+	var booth_door := RoomContent.booth_door()
+	var landed := RoomContent.BOOTH_Y + 90.0
+	walker.state.position = Vector2(booth_door.x, -440.0)
+	walker.state.velocity = Vector2.ZERO
+	drift = 0.0
+	_begin_leg(world)
+
+	for _i in range(600):
+		_stride(world, Vector2.DOWN)
+		drift = maxf(drift, absf(walker.position().x - booth_door.x))
+		if walker.position().y >= landed:
+			break
+
+	_check(
+		RoomContent.in_aisle(walker.position()) and drift < 0.5,
+		"holding south out of the booth's door lands in the aisle, not the hall (%.1f off the line)" % drift,
+		"the booth still has one door; it opens onto the aisle now"
+	)
+	_at_pace(
+		_leg("the booth, out of its door into the aisle", func(at: Vector2) -> bool:
+			return at.y >= landed),
+		"and walks it"
+	)
+
+	# --- Out between the benches, west into the hall ----------------------------------
+
+	walker.state.position = Vector2(lane, door.y)
+	walker.state.velocity = Vector2.ZERO
+	drift = 0.0
+	_begin_leg(world)
+
+	for _i in range(600):
+		_stride(world, Vector2.LEFT)
+		drift = maxf(drift, absf(walker.position().y - door.y))
+		if walker.position().x < outside:
+			break
+
+	_check(
+		walker.position().x < outside and drift < 0.5,
+		"holding west from the wall goes out between the benches into the hall (%.1f off the line)" % drift
+	)
+	_at_pace(
+		_leg("the aisle, out of its door", func(at: Vector2) -> bool:
+			return at.x < outside),
+		"and walks it"
+	)
+
+	# --- Its front is a wall, and so are the benches ----------------------------------
+
+	# Head on into each run from the hall, into a bench from the hall straight at the post
+	# backing it, and into the north run from inside. Before the aisle, the first three
+	# walked to the east wall.
+	var corner_n := Vector2(RoomContent.BOOTH_X, RoomContent.BOOTH_Y)
+	var corner_s := Vector2(RoomContent.SNUG_X, RoomContent.SNUG_Y)
+	var mid_n := corner_n.lerp(RoomContent.aisle_back_post(true), 0.5)
+	var mid_s := corner_s.lerp(RoomContent.aisle_back_post(false), 0.5)
+	var held := 0
+
+	for probe in [
+		[Vector2(mid_n.x - 200.0, mid_n.y), Vector2.RIGHT, false],
+		[Vector2(mid_s.x - 200.0, mid_s.y), Vector2.RIGHT, false],
+		[Vector2(480.0, -bench.y), Vector2.RIGHT, false],
+		[Vector2(lane, mid_n.y), Vector2.LEFT, true],
+	]:
+		walker.state.position = probe[0]
+		walker.state.velocity = Vector2.ZERO
+		for _i in range(600):
+			world.tick({1: _walk(probe[1])})
+		if RoomContent.in_aisle(walker.position()) == probe[2]:
+			held += 1
+
+	_check(
+		held == 4,
+		"walking into either run or a bench from the hall, or out through the front from inside, does not go through (%d of 4 held)"
+			% held,
+		"before the aisle the east wall's strip was open to the hall along its whole length"
+	)
+
+	# --- Measured -----------------------------------------------------------------------
+
+	# Off the pieces that stand. The door is between the two benches as furniture() has
+	# them; each backing post is its run's easternmost, and it has to overlap its bench by
+	# the partition's twenty and leave the door's width to the east wall.
+	var benches: Array[Vector3] = []
+	for piece in RoomContent.furniture():
+		if piece.x == bench.x and absf(piece.y) == bench.y:
+			benches.append(piece)
+	var width := absf(benches[0].y - benches[1].y) - benches[0].z - benches[1].z
+	var joints: Array[float] = []
+	var lanes: Array[float] = []
+	for side in [-1.0, 1.0]:
+		var back := Vector3(-INF, 0.0, 0.0)
+		for piece in screen:
+			if signf(piece.y) == side and piece.x > back.x:
+				back = piece
+		var near := benches[0] if signf(benches[0].y) == side else benches[1]
+		joints.append(near.z + back.z - Vector2(back.x, back.y).distance_to(Vector2(near.x, near.y)))
+		lanes.append(extent.x - back.x - back.z)
+	var on_booth := -INF
+	var on_snug := -INF
+	for piece in screen:
+		var at := Vector2(piece.x, piece.y)
+		on_booth = maxf(on_booth, RoomContent.BOOTH_POST_RADIUS + piece.z - at.distance_to(corner_n))
+		on_snug = maxf(on_snug, RoomContent.SNUG_POST_RADIUS + piece.z - at.distance_to(corner_s))
+	var joined := absf(joints[0] - RoomContent.GALLERY_OVERLAP) < 0.01 \
+		and absf(joints[1] - RoomContent.GALLERY_OVERLAP) < 0.01 \
+		and on_booth >= RoomContent.GALLERY_OVERLAP - 0.01 \
+		and on_snug >= RoomContent.GALLERY_OVERLAP - 0.01
+	_check(
+		absf(width - RoomContent.DOORWAY_SPAN) < 0.01
+			and absf(lanes[0] - RoomContent.DOORWAY_SPAN) < 0.01
+			and absf(lanes[1] - RoomContent.DOORWAY_SPAN) < 0.01
+			and joined,
+		"its door is the front door's width (%.1f), so is the lane behind each bench (%.1f, %.1f), and it is joined to both benches (%.1f, %.1f), the booth (%.1f) and the snug (%.1f)"
+			% [width, lanes[0], lanes[1], joints[0], joints[1], on_booth, on_snug]
+	)
+
+	# Everything it is not joined to: nothing narrower than the front door. The benches, the
+	# booth and the snug are left out, because it is joined to all three (the snug's seat
+	# too, which stands behind the snug's north arm from here).
+	var widest := 0.0
+	for index in range(1, screen.size()):
+		var at := Vector2(screen[index].x, screen[index].y)
+		var before := Vector2(screen[index - 1].x, screen[index - 1].y)
+		if signf(screen[index].y) == signf(screen[index - 1].y):
+			widest = maxf(widest, at.distance_to(before))
+	var skip := RoomContent.booth_screen()
+	skip.append_array(RoomContent.snug_screen())
+	skip.append(RoomContent.snug_seat())
+	skip.append_array(PackedVector3Array(benches))
+	var narrowest := INF
+	var where := ""
+	for piece in screen:
+		var at := Vector2(piece.x, piece.y)
+		for other in RoomContent.furniture():
+			if other in screen or other in skip:
+				continue
+			var there := Vector2(other.x, other.y)
+			var gap := at.distance_to(there) - piece.z - other.z
+			if gap < narrowest:
+				narrowest = gap
+				where = "(%.0f, %.0f) to (%.0f, %.0f)" % [at.x, at.y, there.x, there.y]
+
+	_check(
+		widest <= r * 2.0 - RoomContent.GALLERY_OVERLAP + 0.01
+			and narrowest >= RoomContent.DOORWAY_SPAN - 0.01,
+		"its posts overlap by at least %.0f (%.1f apart at most), and nothing about it is narrower than the front door (%.1f, %s)"
+			% [RoomContent.GALLERY_OVERLAP, widest, narrowest, where]
+	)
+	_done()
+
+
 ## Who can hear whom, as the room decides it. See [method RoomContent.within_earshot].
 ##
 ## [b]Pure geometry, and the sandbox is where it meets the routers.[/b] This is the rule on
@@ -1709,6 +1974,19 @@ func _test_earshot() -> void:
 			and hears.call(Vector2(-450.0, -520.0), Vector2(-770.0, -520.0)),
 		"inside the landing is out of earshot of the hall, through its front and the old slot, and hears its own floor and the wing's gate"
 	)
+
+	# The aisle: across its front and through a bench it is deaf to the hall; through its
+	# door, the booth's and the snug's east gate it hears, because each is line of sight.
+	var in_aisle := Vector2(850.0, -200.0)
+	_check(
+		RoomContent.in_aisle(in_aisle)
+			and deaf.call(in_aisle, Vector2(520.0, -200.0))
+			and deaf.call(Vector2(500.0, -RoomContent.BENCH_AT.y), Vector2(850.0, -RoomContent.BENCH_AT.y))
+			and hears.call(Vector2(500.0, 0.0), Vector2(850.0, 0.0))
+			and hears.call(Vector2(RoomContent.booth_door().x, -240.0), Vector2(RoomContent.booth_door().x, -420.0))
+			and hears.call(Vector2(850.0, -100.0), Vector2(850.0, 400.0)),
+		"inside the aisle is out of earshot of the hall, through its front and through a bench, and hears through its door, the booth's and the snug's gate"
+	)
 	_done()
 
 
@@ -1765,6 +2043,7 @@ func _test_reach() -> void:
 	var reached_booth := false
 	var reached_bay := false
 	var reached_landing := false
+	var reached_aisle := false
 	var head := 0
 
 	while head < queue.size():
@@ -1788,6 +2067,9 @@ func _test_reach() -> void:
 
 		if RoomContent.in_landing(inner.position + Vector2(column, row) * STEP):
 			reached_landing = true
+
+		if RoomContent.in_aisle(inner.position + Vector2(column, row) * STEP):
+			reached_aisle = true
 
 		for step in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
 			var c: int = column + step.x
@@ -1823,6 +2105,7 @@ func _test_reach() -> void:
 	_check(reached_alcove and reached_booth, "and into the alcove and the booth")
 	_check(reached_bay, "and into the bay")
 	_check(reached_landing, "and onto the landing")
+	_check(reached_aisle, "and into the aisle")
 	_check(
 		reached == total,
 		"and every point a walker fits at is one it can get to (%d of %d%s)"
